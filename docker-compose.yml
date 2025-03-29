@@ -1,5 +1,4 @@
-version: '3.8'
-
+name: connector_manager
 networks:
   connector_network:
     name: connector_network

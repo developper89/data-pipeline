@@ -1,5 +1,5 @@
 connectors:
-  - connector_id: "mqtt_connector1"
+  - connector_id: "broker_preservarium_legacy"
     image: "mqtt-connector:latest"
     env:
       BROKER_HOST: "preservarium.fr"
@@ -7,7 +7,6 @@ connectors:
       KAFKA_BOOTSTRAP: "kafka:9092"
       KAFKA_TOPIC: "topic1"
       MQTT_TOPICS: "sensors/#,devices/#"
-      CONNECTOR_SCRIPT_PATH: "/app/connector_scripts/mqtt_to_kafka.py"
       USE_TLS: "true"
       MQTT_USERNAME: "root"
       MQTT_PASSWORD: "root"

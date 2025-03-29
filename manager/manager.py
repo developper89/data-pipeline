@@ -4,7 +4,7 @@ import yaml
 import docker
 import logging
 from typing import Dict, Set, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # Configure logging
 logging.basicConfig(
@@ -68,7 +68,7 @@ def check_container_health(container: docker.models.containers.Container) -> Tup
         # Check if container is restarting too frequently
         if container.attrs['RestartCount'] > 0:
             started_at = datetime.fromisoformat(container.attrs['State']['StartedAt'].replace('Z', '+00:00'))
-            if datetime.utcnow() - started_at < timedelta(minutes=1):
+            if datetime.now(timezone.utc) - started_at < timedelta(minutes=1):
                 return False, "Container is restarting too frequently"
                 
         return True, "Container is healthy"
@@ -126,7 +126,7 @@ def handle_unhealthy_container(client: docker.DockerClient, container: docker.mo
         started_at = datetime.fromisoformat(container.attrs['State']['StartedAt'].replace('Z', '+00:00'))
         restart_count = container.attrs['RestartCount']
         
-        if restart_count >= MAX_RESTART_ATTEMPTS and datetime.utcnow() - started_at < timedelta(seconds=RESTART_WINDOW):
+        if restart_count >= MAX_RESTART_ATTEMPTS and datetime.now(timezone.utc) - started_at < timedelta(seconds=RESTART_WINDOW):
             logger.error(f"Container {container_name} has been restarting too frequently. Recreating container...")
             container.remove(force=True)
             create_connector_container(client, connector_config)

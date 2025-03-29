@@ -1,0 +1,46 @@
+version: '3.8'
+
+networks:
+  connector_network:
+    name: connector_network
+    driver: bridge
+
+services:
+  manager:
+    container_name: manager
+    build:
+      context: .
+      dockerfile: manager/Dockerfile
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock  # Allow Docker-in-Docker
+      - ./manager:/app/manager
+    environment:
+      - CONFIG_PATH=/app/manager/connectors_config.yaml
+    networks:
+      - connector_network
+    depends_on:
+      - kafka
+
+  kafka:
+    image: apache/kafka:latest
+    container_name: kafka
+    networks:
+      - connector_network
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # Update listeners to use the service name for internal network communication
+      KAFKA_LISTENERS: PLAINTEXT://kafka:9092,CONTROLLER://kafka:9093,EXTERNAL://localhost:29092
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # Other Kafka configurations
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_NUM_PARTITIONS: 3
+    ports:
+      - "29092:29092"  # External access port 

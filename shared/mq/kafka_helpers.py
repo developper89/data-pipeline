@@ -5,8 +5,27 @@ from kafka import KafkaProducer, KafkaConsumer
 from kafka.errors import KafkaError
 import time
 import os
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+class DateTimeEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles datetime objects."""
+    def default(self, obj):
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        # Handle bytes objects (often used in RawMessage.payload)
+        elif isinstance(obj, bytes):
+            return obj.hex()  # Convert bytes to hex string
+        # Let the base class handle the rest
+        return super().default(obj)
+
+def model_to_dict(model):
+    """Convert a Pydantic model to a dictionary with proper datetime handling."""
+    if hasattr(model, 'model_dump'):  # Pydantic v2
+        return model.model_dump()
+    else:  # Pydantic v1
+        return model.dict()
 
 def create_kafka_producer(bootstrap_servers):
     """Creates a KafkaProducer instance with basic error handling."""
@@ -15,7 +34,7 @@ def create_kafka_producer(bootstrap_servers):
         try:
             producer = KafkaProducer(
                 bootstrap_servers=bootstrap_servers.split(','),
-                value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+                value_serializer=lambda v: json.dumps(v, cls=DateTimeEncoder).encode('utf-8'),
                 retries=5, # Retry sending messages
                 acks='all' # Wait for all replicas to acknowledge
             )
@@ -55,6 +74,11 @@ def create_kafka_consumer(topic, group_id, bootstrap_servers, auto_offset_reset=
 def publish_message(producer: KafkaProducer, topic: str, value: dict, key: str = None):
     """Publishes a message to a Kafka topic."""
     try:
+        # Convert Pydantic models to dict if needed
+        if hasattr(value, '__dict__') and hasattr(value, 'model_dump'):
+            # This is likely a Pydantic model
+            value = model_to_dict(value)
+            
         key_bytes = key.encode('utf-8') if key else None
         future = producer.send(topic, value=value, key=key_bytes)
         # Optional: Block until message is sent (synchronous)

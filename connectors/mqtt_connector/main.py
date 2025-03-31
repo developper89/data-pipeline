@@ -5,6 +5,7 @@ import sys
 import time
 
 from kafka_producer import KafkaMsgProducer
+from shared.mq.kafka_helpers import create_kafka_producer
 from client import MQTTClientWrapper
 import config
 
@@ -32,12 +33,13 @@ def main():
 
     try:
         # Initialize Kafka Producer
-        kafka_producer_instance = KafkaMsgProducer()
+        kafka_producer_instance = create_kafka_producer(config.KAFKA_BOOTSTRAP_SERVERS)
         if not kafka_producer_instance:
             raise RuntimeError("Failed to initialize Kafka Producer.")
 
+        kafka_msg_prod = KafkaMsgProducer(kafka_producer_instance)
         # Initialize MQTT Client
-        mqtt_client_wrapper = MQTTClientWrapper(kafka_producer_instance)
+        mqtt_client_wrapper = MQTTClientWrapper(kafka_msg_prod)
         mqtt_client_wrapper.connect()  # Initiate connection
 
         # Start MQTT blocking loop (handles reconnects)

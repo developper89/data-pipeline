@@ -16,6 +16,7 @@ services:
       - ./shared:/app/shared
     environment:
       - CONFIG_PATH=/app/manager/connectors_config.yaml
+      - HOST_SHARED_PATH=${PWD}/shared  # Absolute path to shared directory on host
     networks:
       - connector_network
     depends_on:

@@ -146,8 +146,8 @@ class MQTTClientWrapper:
             logger.debug(f"Received message on topic '{msg.topic}' (QoS {msg.qos})")
             
             topic_parts = msg.topic.split('/')
-            if len(topic_parts) >= 2 and topic_parts[0] == 'devices' and topic_parts[-1] == 'data':
-                 device_id = topic_parts[1]
+            if len(topic_parts) >= 2 and topic_parts[0] == 'broker_data' and topic_parts[-1] == 'data':
+                 device_id = topic_parts[2]
             else:
                  logger.warning(f"Could not extract device ID from topic: {msg.topic}. Using topic as ID.")
                  device_id = msg.topic # Fallback or error
@@ -157,7 +157,7 @@ class MQTTClientWrapper:
             # Create RawMessage
             raw_message = RawMessage(
                 device_id=device_id,
-                payload_b64=base64.b64encode(payload_bytes).decode('ascii'),
+                payload=payload_bytes,
                 protocol="mqtt",
                 metadata={
                     "mqtt_topic": msg.topic,

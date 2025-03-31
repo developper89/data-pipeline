@@ -2,6 +2,7 @@
 import logging
 import json
 import asyncio # Needed if using async DB/Script clients
+import os
 import signal
 from typing import Optional, Dict, Any
 
@@ -12,29 +13,29 @@ from pydantic import ValidationError
 # Import shared helpers, models, and local components
 from shared.mq.kafka_helpers import create_kafka_consumer, create_kafka_producer # Keep helpers for creation
 from shared.models.common import RawMessage, StandardizedOutput, ErrorMessage, generate_request_id
-from shared.db.database import get_db_session # For async session management
+from shared.repositories.parser_repository import ParserRepository, DeviceNotFoundError
+from shared.db.database import init_db
 
 # Import local components
 from kafka_producer import NormalizerKafkaProducer # Import the new wrapper
-from .db_client import DBClient, DeviceNotFoundError, MultipleDevicesFoundError
-from .script_client import ScriptClient, ScriptNotFoundError
-from .sandbox import get_sandbox, SandboxExecutionError, SandboxTimeoutError, SandboxResourceError
+from script_client import ScriptClient, ScriptNotFoundError
+
 import config
+
 
 logger = logging.getLogger(__name__)
 
 class NormalizerService:
-    def __init__(self):
+    async def __init__(self):
         self.consumer: Optional[KafkaConsumer] = None
         # Use the dedicated wrapper for producing messages
         self.kafka_producer: Optional[NormalizerKafkaProducer] = None
-        self.db_client = DBClient(session_factory=get_db_session) # Uses shared async session factory
+        db_pool = await init_db()
+        self.parser_repository = ParserRepository(db_pool)
         self.script_client = ScriptClient(
             storage_type=config.SCRIPT_STORAGE_TYPE,
             local_dir=config.LOCAL_SCRIPT_DIR
-            # Add S3 args if configured
         )
-        self.sandbox = get_sandbox()
         self._running = False
         self._stop_event = asyncio.Event() # Use asyncio event if using async components
 
@@ -74,11 +75,11 @@ class NormalizerService:
 
             # 2. Fetch Device Configuration
             try:
-                device_config_db = await self.db_client.get_device_config(raw_message.device_id)
-                if not device_config_db:
+                parser_config_db = await self.parser_repository.get_parser_for_sensor(raw_message.device_id)
+                if not parser_config_db:
                     raise DeviceNotFoundError(f"Config lookup returned None for {raw_message.device_id}")
-                logger.debug(f"[{request_id}] Found config for {raw_message.device_id}: script={device_config_db.parser_script_ref}")
-            except (DeviceNotFoundError, MultipleDevicesFoundError) as e:
+                logger.debug(f"[{request_id}] Found config for {raw_message.device_id}: script={parser_config_db['file_path']}")
+            except (DeviceNotFoundError) as e:
                 logger.error(f"[{request_id}] Configuration error for device '{raw_message.device_id}': {e}")
                 await self._publish_processing_error(f"Configuration Error: {type(e).__name__}", error=str(e), original_message=job_dict, request_id=request_id, topic_details=(topic, partition, offset))
                 error_published = True
@@ -91,9 +92,10 @@ class NormalizerService:
 
             # 3. Fetch Parser Script Content
             try:
-                script_ref = device_config_db.parser_script_ref
+                filename = os.path.basename(parser_config_db["file_path"])
+                script_ref = os.path.join(self.script_client.local_dir, filename)
                 script_module = await self.script_client.get_module(script_ref)
-                logger.debug(f"[{request_id}] Fetched script content for ref: {script_ref}")
+                logger.debug(f"[{request_id}] Loaded script for ref: {script_ref}")
             except ScriptNotFoundError as e:
                  logger.error(f"[{request_id}] Script not found for device '{raw_message.device_id}': {e}")
                  await self._publish_processing_error("Script Not Found", error=str(e), original_message=job_dict, request_id=request_id, topic_details=(topic, partition, offset))
@@ -110,10 +112,10 @@ class NormalizerService:
                 if hasattr(script_module, 'parse'):
                     print("Starting parser ...")
                     parser_output_dict = script_module.parse(raw_message.payload_b64)
-                    logger.debug(f"[{request_id}] Sandbox execution completed.")
+                    logger.debug(f"[{request_id}] Script execution completed.")
             except Exception as e: # Catch unexpected sandbox errors
-                 logger.exception(f"[{request_id}] Unexpected sandbox error for {raw_message.device_id}: {e}")
-                 await self._publish_processing_error("Unexpected Sandbox Error", error=str(e), original_message=job_dict, request_id=request_id, topic_details=(topic, partition, offset))
+                 logger.exception(f"[{request_id}] Unexpected script execution error for {raw_message.device_id}: {e}")
+                 await self._publish_processing_error("Unexpected Script Error", error=str(e), original_message=job_dict, request_id=request_id, topic_details=(topic, partition, offset))
                  error_published = True
                  return True # Assume non-retryable
 
@@ -121,9 +123,6 @@ class NormalizerService:
             try:
                 if 'device_id' not in parser_output_dict:
                     parser_output_dict['device_id'] = raw_message.device_id
-                parser_output_dict['labels'] = device_config_db.labels
-                parser_output_dict['request_id'] = request_id
-                parser_output_dict['timestamp'] = raw_message.timestamp # Use timestamp from raw message
 
                 standardized_data = StandardizedOutput(**parser_output_dict)
                 logger.debug(f"[{request_id}] Validated standardized output.")

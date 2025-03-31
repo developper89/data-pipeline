@@ -19,15 +19,6 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:pass@localho
 # Script Storage Config
 SCRIPT_STORAGE_TYPE = os.getenv("SCRIPT_STORAGE_TYPE", "local") # 'local' or 's3'
 LOCAL_SCRIPT_DIR = os.getenv("LOCAL_SCRIPT_DIR", "../storage/parser_scripts")
-# S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME") # If using S3
-# AWS_REGION = os.getenv("AWS_REGION")        # If using S3
-
-# Sandboxing Config (Same as previous parser_service)
-SANDBOX_TYPE = os.getenv("SANDBOX_TYPE", "subprocess") # 'subprocess' or 'docker'
-SCRIPT_EXECUTION_TIMEOUT_SECONDS = int(os.getenv("SCRIPT_EXECUTION_TIMEOUT_SECONDS", "5"))
-SCRIPT_MAX_CPU_SECONDS = int(os.getenv("SCRIPT_MAX_CPU_SECONDS", "2"))
-SCRIPT_MAX_MEMORY_BYTES = int(os.getenv("SCRIPT_MAX_MEMORY_BYTES", "100")) * 1024 * 1024
-TEMP_SCRIPT_DIR = os.getenv("TEMP_SCRIPT_DIR", "/tmp/parser_scripts_norm") # Ensure this exists
 
 # Service Config
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

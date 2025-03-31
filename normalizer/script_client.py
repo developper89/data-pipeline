@@ -3,7 +3,6 @@ import importlib
 import logging
 import sys
 import os
-from . import config
 
 logger = logging.getLogger(__name__)
 
@@ -11,7 +10,7 @@ class ScriptNotFoundError(Exception):
     pass
 
 class ScriptClient:
-    def __init__(self, storage_type: str, local_dir: str = None, s3_bucket: str = None, region: str = None):
+    def __init__(self, storage_type: str, local_dir: str = None):
         self.storage_type = storage_type.lower()
         self.local_dir = local_dir
         if self.storage_type == 'local':

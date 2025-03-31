@@ -31,16 +31,17 @@ validate_env() {
 validate_env
 
 # Check if CONNECTOR_SCRIPT_PATH is set
-if [ -z "$CONNECTOR_SCRIPT_PATH" ]; then
-    echo "Error: CONNECTOR_SCRIPT_PATH environment variable is not set"
-    exit 1
-fi
+# if [ -z "$CONNECTOR_SCRIPT_PATH" ]; then
+#     echo "Error: CONNECTOR_SCRIPT_PATH environment variable is not set"
+#     exit 1
+# fi
 
-# Check if the script exists
-if [ ! -f "$CONNECTOR_SCRIPT_PATH" ]; then
-    echo "Error: Script not found at $CONNECTOR_SCRIPT_PATH"
-    exit 1
-fi
+# # Check if the script exists
+# if [ ! -f "$CONNECTOR_SCRIPT_PATH" ]; then
+#     echo "Error: Script not found at $CONNECTOR_SCRIPT_PATH"
+#     exit 1
+# fi
 
-# Execute the specified connector script
-exec python "$CONNECTOR_SCRIPT_PATH" 
+# # Execute the specified connector script
+# exec python "$CONNECTOR_SCRIPT_PATH" 
+exec python /app/mqtt_connector/main.py

@@ -13,14 +13,9 @@ class BaseMessage(BaseModel):
 
 class RawMessage(BaseMessage):
     device_id: str
-    payload_b64: str # Base64 encoded payload bytes
+    payload: bytes # Base64 encoded payload bytes
     protocol: str   # e.g., 'mqtt', 'coap'
     metadata: dict = {} # Optional extra metadata from gateway
-
-class ParseJob(BaseMessage):
-    raw_payload_b64: str
-    script_content: str # The actual python code as a string
-    device_config: dict # Relevant config like labels, device name, etc.
 
 class ErrorMessage(BaseMessage):
     service: str = "dispatcher"
@@ -36,5 +31,4 @@ class StandardizedOutput(BaseModel):
     values: List[Any]
     label: Optional[List[str]] = None
     index: str = ""
-    timestamp: datetime.datetime = Field(default_factory=datetime.datetime.now)
     metadata: Dict[str, Any] = Field(default_factory=dict)

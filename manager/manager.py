@@ -93,6 +93,15 @@ def create_connector_container(client: docker.DockerClient, connector_config: di
         # Ensure network exists
         ensure_network_exists(client)
 
+        # Get the project root directory (one level up from manager directory)
+        # project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        # Define volume bindings with correct absolute paths
+        volumes = {
+            # os.path.join(project_root, 'shared'): {'bind': '/app/shared', 'mode': 'rw'},
+            '/app/shared': {'bind': '/app/shared', 'mode': 'rw'},
+        }
+
         logger.info(f"Creating container {container_name} from image {connector_config['image']}")
         container = client.containers.create(
             image=connector_config["image"],
@@ -100,7 +109,8 @@ def create_connector_container(client: docker.DockerClient, connector_config: di
             detach=True,
             environment=connector_config.get("env", {}),
             restart_policy={"Name": "on-failure", "MaximumRetryCount": MAX_RESTART_ATTEMPTS},
-            network=NETWORK_NAME
+            network=NETWORK_NAME,
+            volumes=volumes  # Add the volumes configuration
         )
         
         # Start the container

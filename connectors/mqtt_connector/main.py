@@ -4,10 +4,9 @@ import signal
 import sys
 import time
 
-from shared.mq.kafka_helpers import create_kafka_producer
-from .client import MQTTClientWrapper
-from .kafka_producer import KafkaMsgProducer
-from . import config
+from kafka_producer import KafkaMsgProducer
+from client import MQTTClientWrapper
+import config
 
 # Configure logging
 logging.basicConfig(
@@ -32,28 +31,25 @@ def main():
     signal.signal(signal.SIGTERM, signal_handler)
 
     try:
-        # Initialize Kafka Producer (with retry)
-        kafka_producer_instance = create_kafka_producer(config.KAFKA_BOOTSTRAP_SERVERS)
+        # Initialize Kafka Producer
+        kafka_producer_instance = KafkaMsgProducer()
         if not kafka_producer_instance:
-             raise RuntimeError("Failed to initialize Kafka Producer after retries.")
-
-        kafka_msg_prod = KafkaMsgProducer(kafka_producer_instance)
+            raise RuntimeError("Failed to initialize Kafka Producer.")
 
         # Initialize MQTT Client
-        mqtt_client_wrapper = MQTTClientWrapper(kafka_msg_prod)
-        mqtt_client_wrapper.connect() # Initiate connection
+        mqtt_client_wrapper = MQTTClientWrapper(kafka_producer_instance)
+        mqtt_client_wrapper.connect()  # Initiate connection
 
         # Start MQTT blocking loop (handles reconnects)
         mqtt_client_wrapper.start_loop()
 
     except Exception as e:
-         logger.exception(f"Fatal error during MQTT Connector execution: {e}")
-         sys.exit(1)
+        logger.exception(f"Fatal error during MQTT Connector execution: {e}")
+        sys.exit(1)
     finally:
         # Cleanup is handled by signal_handler or upon loop exit
         logger.info("MQTT Connector main function finished.")
         cleanup()
-
 
 def signal_handler(signum, frame):
     """Handles shutdown signals."""
@@ -65,26 +61,24 @@ def cleanup():
     """Perform graceful shutdown."""
     global kafka_producer_instance, mqtt_client_wrapper
     logger.info("Starting cleanup...")
+    
     if mqtt_client_wrapper:
         logger.info("Stopping MQTT client...")
         try:
             mqtt_client_wrapper.stop_loop()
         except Exception as e:
-             logger.error(f"Error stopping MQTT client: {e}")
-        mqtt_client_wrapper = None # Allow garbage collection
+            logger.error(f"Error stopping MQTT client: {e}")
+        mqtt_client_wrapper = None  # Allow garbage collection
 
     if kafka_producer_instance:
         logger.info("Closing Kafka producer...")
         try:
-            # KafkaMsgProducer class now handles closing the underlying producer
-            kafka_msg_prod_wrapper = KafkaMsgProducer(kafka_producer_instance)
-            kafka_msg_prod_wrapper.close()
+            kafka_producer_instance.close()
         except Exception as e:
             logger.error(f"Error closing Kafka producer: {e}")
         kafka_producer_instance = None
 
     logger.info("Cleanup complete.")
-
 
 if __name__ == "__main__":
     main()

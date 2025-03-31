@@ -1,10 +1,9 @@
 # mqtt_connector/kafka_producer.py
 import logging
-
-from shared.mq.kafka_helpers import publish_message
-from shared.models.common import RawMessage, ErrorMessage
 from kafka import KafkaProducer
-from . import config
+from shared.models.common import RawMessage, ErrorMessage
+from shared.mq.kafka_helpers import publish_message
+import config
 
 logger = logging.getLogger(__name__)
 

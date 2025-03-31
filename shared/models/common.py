@@ -1,4 +1,5 @@
 # shared/models/common.py
+from typing import Any, Dict, List, Optional
 import uuid
 from datetime import datetime
 from pydantic import BaseModel, Field
@@ -25,3 +26,15 @@ class ErrorMessage(BaseMessage):
     service: str = "dispatcher"
     error: str
     original_message: dict | None = None # The message that caused the error
+
+class StandardizedOutput(BaseModel):
+    """
+    Represents sensor readings with a consistent structure:
+    device_id, values, timestamp, metadata, index, optional label.
+    """
+    device_id: str
+    values: List[Any]
+    label: Optional[List[str]] = None
+    index: str = ""
+    timestamp: datetime.datetime = Field(default_factory=datetime.datetime.now)
+    metadata: Dict[str, Any] = Field(default_factory=dict)

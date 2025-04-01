@@ -4,12 +4,13 @@ import logging
 import signal
 import os
 import sys
-
+from shared.db.database import init_db
+from shared.repositories.parser_repository import ParserRepository
 # Ensure other local modules are importable if running as main
 # sys.path.append(os.path.dirname(__file__)) # Or use `python -m normalizer_service.main`
 
 import config
-from normalizer_service import NormalizerService
+from service import NormalizerService
 
 # Configure logging
 logging.basicConfig(
@@ -40,9 +41,10 @@ service_instance = None
 async def main():
     global service_instance
     logger.info("Initializing Normalizer Service...")
-
+    db_pool = await init_db()
+    parser_repository = ParserRepository(db_pool)
     # Create the service instance
-    service_instance = NormalizerService()
+    service_instance = NormalizerService(parser_repository)
 
     # Setup signal handlers
     loop = asyncio.get_running_loop()

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 CONFIG_PATH = os.getenv('CONFIG_PATH', 'connectors_config.yaml')
 CHECK_INTERVAL = int(os.getenv('CHECK_INTERVAL', '30'))  # seconds
-NETWORK_NAME = "preservarium_net"  # Must match the network name in docker-compose.yml
+NETWORK_NAME = "preservarium_dev_net"  # Must match the network name in docker-compose.yml
 MAX_RESTART_ATTEMPTS = 3  # Maximum number of restart attempts within the time window
 RESTART_WINDOW = 300  # Time window in seconds (5 minutes) for counting restarts
 

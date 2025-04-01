@@ -13,8 +13,8 @@ from pydantic import ValidationError
 # Import shared helpers, models, and local components
 from shared.mq.kafka_helpers import create_kafka_consumer, create_kafka_producer # Keep helpers for creation
 from shared.models.common import RawMessage, StandardizedOutput, ErrorMessage, generate_request_id
-from shared.repositories.parser_repository import ParserRepository, DeviceNotFoundError
-from shared.db.database import init_db
+from shared.repositories.parser_repository import DeviceNotFoundError, ParserRepository
+
 
 # Import local components
 from kafka_producer import NormalizerKafkaProducer # Import the new wrapper
@@ -26,7 +26,8 @@ import config
 logger = logging.getLogger(__name__)
 
 class NormalizerService:
-    def __init__(self):
+    def __init__(self, parser_repository: ParserRepository):
+        self.parser_repository = parser_repository
         self.consumer: Optional[KafkaConsumer] = None
         # Use the dedicated wrapper for producing messages
         self.kafka_producer: Optional[NormalizerKafkaProducer] = None
@@ -74,22 +75,17 @@ class NormalizerService:
 
             # 2. Fetch Device Configuration
             try:
-                db_pool = await init_db()
-                parser_repository = ParserRepository(db_pool)
-                parser_config_db = await parser_repository.get_parser_for_sensor(raw_message.device_id)
+                parser_config_db = await self.parser_repository.get_parser_for_sensor(raw_message.device_id)
                 if not parser_config_db:
                     raise DeviceNotFoundError(f"Config lookup returned None for {raw_message.device_id}")
                 logger.debug(f"[{request_id}] Found config for {raw_message.device_id}: script={parser_config_db['file_path']}")
             except (DeviceNotFoundError) as e:
-                logger.error(f"[{request_id}] Configuration error for device '{raw_message.device_id}': {e}")
-                await self._publish_processing_error(f"Configuration Error: {type(e).__name__}", error=str(e), original_message=job_dict, request_id=request_id, topic_details=(topic, partition, offset))
-                error_published = True
                 return True # Indicate error was handled
             except Exception as e: # Catch DB errors
-                 logger.exception(f"[{request_id}] Database error fetching config for {raw_message.device_id}: {e}")
-                 await self._publish_processing_error("Database Error", error=str(e), original_message=job_dict, request_id=request_id, topic_details=(topic, partition, offset))
-                 error_published = True
-                 return True # Assume non-retryable for now
+                logger.exception(f"[{request_id}] Database error fetching config for {raw_message.device_id}: {e}")
+                await self._publish_processing_error("Database Error", error=str(e), original_message=job_dict, request_id=request_id, topic_details=(topic, partition, offset))
+                error_published = True
+                return True # Assume non-retryable for now
 
             # 3. Fetch Parser Script Content
             try:
@@ -114,6 +110,11 @@ class NormalizerService:
                     print("Starting parser ...")
                     parser_output_dict = script_module.parse(raw_message.payload_b64)
                     logger.debug(f"[{request_id}] Script execution completed.")
+                else:
+                    logger.error(f"[{request_id}] Script module does not have a 'parse' method.")
+                    await self._publish_processing_error("Script Missing Parse Method", error="Script module does not have a 'parse' method", original_message=job_dict, request_id=request_id, topic_details=(topic, partition, offset))
+                    error_published = True
+                    return True # Assume non-retryable
             except Exception as e: # Catch unexpected sandbox errors
                  logger.exception(f"[{request_id}] Unexpected script execution error for {raw_message.device_id}: {e}")
                  await self._publish_processing_error("Unexpected Script Error", error=str(e), original_message=job_dict, request_id=request_id, topic_details=(topic, partition, offset))

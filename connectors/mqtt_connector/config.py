@@ -20,5 +20,5 @@ USE_TLS = os.getenv("USE_TLS", "false").lower() == "true"
 CA_CERT_CONTENT = os.getenv("CA_CERT_CONTENT")
 
 # Service Config
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_LEVEL = os.getenv("LOG_LEVEL", "DEBUG").upper()
 SERVICE_NAME = "mqtt_connector"

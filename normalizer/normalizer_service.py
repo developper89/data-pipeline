@@ -26,12 +26,11 @@ import config
 logger = logging.getLogger(__name__)
 
 class NormalizerService:
-    async def __init__(self):
+    def __init__(self):
         self.consumer: Optional[KafkaConsumer] = None
         # Use the dedicated wrapper for producing messages
         self.kafka_producer: Optional[NormalizerKafkaProducer] = None
-        db_pool = await init_db()
-        self.parser_repository = ParserRepository(db_pool)
+        
         self.script_client = ScriptClient(
             storage_type=config.SCRIPT_STORAGE_TYPE,
             local_dir=config.LOCAL_SCRIPT_DIR
@@ -75,7 +74,9 @@ class NormalizerService:
 
             # 2. Fetch Device Configuration
             try:
-                parser_config_db = await self.parser_repository.get_parser_for_sensor(raw_message.device_id)
+                db_pool = await init_db()
+                parser_repository = ParserRepository(db_pool)
+                parser_config_db = await parser_repository.get_parser_for_sensor(raw_message.device_id)
                 if not parser_config_db:
                     raise DeviceNotFoundError(f"Config lookup returned None for {raw_message.device_id}")
                 logger.debug(f"[{request_id}] Found config for {raw_message.device_id}: script={parser_config_db['file_path']}")

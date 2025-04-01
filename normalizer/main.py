@@ -8,22 +8,30 @@ import sys
 # Ensure other local modules are importable if running as main
 # sys.path.append(os.path.dirname(__file__)) # Or use `python -m normalizer_service.main`
 
-from . import config
-from .service import NormalizerService
+import config
+from normalizer_service import NormalizerService
 
 # Configure logging
 logging.basicConfig(
     level=config.LOG_LEVEL,
-    format='%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] %(message)s' # Add request_id to format if available
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'  # Remove request_id from format
 )
-# Filter to add request_id to log records if present in task context (advanced)
-# ... (Implementation of Log filter - optional for basic setup)
 
 # Suppress overly verbose library logs
 logging.getLogger("kafka").setLevel(logging.WARNING)
 logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO if os.getenv("SQL_DEBUG") else logging.WARNING)
 logging.getLogger("asyncio").setLevel(logging.INFO)
 
+# Create a custom filter to add request_id to log records when available
+class RequestIdFilter(logging.Filter):
+    def filter(self, record):
+        if not hasattr(record, 'request_id'):
+            record.request_id = '-'
+        return True
+
+# Create a custom log format handler with filter
+root_logger = logging.getLogger()
+root_logger.addFilter(RequestIdFilter())
 
 logger = logging.getLogger(__name__)
 
@@ -32,10 +40,6 @@ service_instance = None
 async def main():
     global service_instance
     logger.info("Initializing Normalizer Service...")
-
-    # Ensure temp dir exists if using subprocess sandbox
-    if config.SANDBOX_TYPE == 'subprocess' and config.TEMP_SCRIPT_DIR:
-         os.makedirs(config.TEMP_SCRIPT_DIR, exist_ok=True)
 
     # Create the service instance
     service_instance = NormalizerService()

@@ -14,7 +14,7 @@ KAFKA_CONSUMER_GROUP_ID = os.getenv("KAFKA_CONSUMER_GROUP_ID", "normalizer_group
 KAFKA_CONSUMER_POLL_TIMEOUT_S = float(os.getenv("KAFKA_CONSUMER_POLL_TIMEOUT_S", "1.0"))
 
 # Database Config (URL usually in shared, but acknowledge here)
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:pass@localhost/iot_config")
+DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost/iot_config")
 
 # Script Storage Config
 SCRIPT_STORAGE_TYPE = os.getenv("SCRIPT_STORAGE_TYPE", "local") # 'local' or 's3'

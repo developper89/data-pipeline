@@ -216,7 +216,7 @@ class MQTTClientWrapper:
             if len(topic_parts) >= 2 and topic_parts[0] == 'broker_data' and topic_parts[-1] == 'data':
                  device_id = topic_parts[2]
             else:
-                 logger.warning(f"Could not extract device ID from topic: {msg.topic}. Using topic as ID.")
+                #  logger.warning(f"Could not extract device ID from topic: {msg.topic}. Using topic as ID.")
                  device_id = msg.topic # Fallback or error
 
             payload_bytes = msg.payload

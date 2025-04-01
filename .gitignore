@@ -1,0 +1,88 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.env
+.venv/
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Local configuration files
+*.env
+.env.local
+.env.*.local
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Docker
+.docker/
+docker-compose.override.yml
+
+# Database files
+*.sqlite3
+*.db
+
+# Temporary and cache files
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# Data pipeline specific
+# Add any specific data directories or temp storage
+storage/parser_scripts/*
+!storage/parser_scripts/.gitkeep
+storage/temp/*
+!storage/temp/.gitkeep
+
+# Certificates and secrets
+*.pem
+*.key
+*.crt
+*.cert
+
+# Generated model code
+**/generated/
+
+# Local backup files
+*.bak
+*.backup
+*~ 

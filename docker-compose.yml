@@ -1,8 +1,9 @@
 name: connector_manager
 networks:
-  connector_network:
-    name: connector_network
-    driver: bridge
+  preservarium_net:
+    external: true
+#     name: preservarium_net
+#     driver: bridge
 
 services:
   manager:
@@ -18,7 +19,7 @@ services:
       - CONFIG_PATH=/app/manager/connectors_config.yaml
       - HOST_SHARED_PATH=${PWD}/shared  # Absolute path to shared directory on host
     networks:
-      - connector_network
+      - preservarium_net
     depends_on:
       - kafka
   
@@ -32,6 +33,7 @@ services:
       - ./shared:/app/shared
       - ./storage:/app/storage
     environment:
+      # Python Path
       # Kafka Configuration
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - KAFKA_RAW_DATA_TOPIC=iot_raw_data
@@ -40,14 +42,14 @@ services:
       - KAFKA_CONSUMER_GROUP_ID=normalizer_group
       - KAFKA_CONSUMER_POLL_TIMEOUT_S=1.0
       # Database Configuration
-      - DATABASE_URL=postgresql+asyncpg://postgres:preservarium@postgres:5432/preservarium
+      - DATABASE_URL=postgresql://postgres:preservarium@postgres:5432/preservarium
       # Script Storage Configuration
       - SCRIPT_STORAGE_TYPE=local
       - LOCAL_SCRIPT_DIR=/app/storage/parser_scripts
       # Service Configuration
       - LOG_LEVEL=INFO
     networks:
-      - connector_network
+      - preservarium_net
     depends_on:
       - kafka
 
@@ -55,7 +57,7 @@ services:
     image: apache/kafka:latest
     container_name: kafka
     networks:
-      - connector_network
+      - preservarium_net
     environment:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller

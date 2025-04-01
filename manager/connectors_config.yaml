@@ -6,7 +6,7 @@ connectors:
       BROKER_PORT: "8883"
       KAFKA_BOOTSTRAP: "kafka:9092"
       KAFKA_TOPIC: "iot_raw_data"
-      MQTT_TOPICS: "broker_data/#"
+      MQTT_TOPICS: "broker_data/+/+/data"
       USE_TLS: "true"
       MQTT_USERNAME: "root"
       MQTT_PASSWORD: "root"

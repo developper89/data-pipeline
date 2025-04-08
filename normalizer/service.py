@@ -24,7 +24,7 @@ import config
 
 
 logger = logging.getLogger(__name__)
-
+logger.setLevel(config.LOG_LEVEL)
 class NormalizerService:
     def __init__(self, parser_repository: ParserRepository):
         self.parser_repository = parser_repository
@@ -108,8 +108,11 @@ class NormalizerService:
             try:
                 if hasattr(script_module, 'parse'):
                     print("Starting parser ...")
-                    parser_output_dict = script_module.parse(raw_message.payload_b64)
-                    logger.debug(f"[{request_id}] Script execution completed.")
+                    parser_output_list = script_module.parse(
+                        payload=raw_message.payload,
+                        config=parser_config_db # Pass the fetched config
+                    )
+                    logger.debug(f"[{request_id}] Script execution completed. Got {len(parser_output_list)} records.")
                 else:
                     logger.error(f"[{request_id}] Script module does not have a 'parse' method.")
                     await self._publish_processing_error("Script Missing Parse Method", error="Script module does not have a 'parse' method", original_message=job_dict, request_id=request_id, topic_details=(topic, partition, offset))
@@ -123,10 +126,17 @@ class NormalizerService:
 
             # 5. Construct and Validate Standardized Output
             try:
-                if 'device_id' not in parser_output_dict:
-                    parser_output_dict['device_id'] = raw_message.device_id
+                standardized_data_list = []
+                for parser_output_dict in parser_output_list:
+                    # if 'device_id' not in parser_output_dict:
+                    #     parser_output_dict['device_id'] = raw_message.device_id
 
-                standardized_data = StandardizedOutput(**parser_output_dict)
+                    standardized_data = StandardizedOutput(**parser_output_dict)
+                    standardized_data.device_id = raw_message.device_id
+                    standardized_data.request_id = request_id
+                    standardized_data.timestamp = raw_message.timestamp
+                    standardized_data_list.append(standardized_data)
+                # logger.debug(f"[{request_id}] Standardized output: {standardized_data_list}")
                 logger.debug(f"[{request_id}] Validated standardized output.")
             except (ValidationError, TypeError) as e:
                 logger.error(f"[{request_id}] Parser script output failed validation for device {raw_message.device_id}: {e}\nOutput: {parser_output_dict}")
@@ -146,9 +156,10 @@ class NormalizerService:
                      logger.error(f"[{request_id}] Kafka producer wrapper not available. Cannot publish standardized data.")
                      return False # Indicate failure, cannot proceed
 
-                self.kafka_producer.publish_standardized_data(standardized_data)
-                # Success logging is now typically within the wrapper or can be added here if preferred
-                logger.info(f"[{request_id}] Published standardized data for device {standardized_data.device_id}")
+                for standardized_data in standardized_data_list:
+                    self.kafka_producer.publish_standardized_data(standardized_data)
+                    # Success logging is now typically within the wrapper or can be added here if preferred
+                    logger.info(f"[{request_id}] Published standardized data for device {standardized_data.device_id}")
                 return True # Success!
 
             except (KafkaError, Exception) as pub_err:

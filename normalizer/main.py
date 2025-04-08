@@ -5,7 +5,8 @@ import signal
 import os
 import sys
 from shared.db.database import init_db
-from shared.repositories.parser_repository import ParserRepository
+from preservarium_sdk.infrastructure.repository.sql_parser_repository import SQLParserRepository
+
 # Ensure other local modules are importable if running as main
 # sys.path.append(os.path.dirname(__file__)) # Or use `python -m normalizer_service.main`
 
@@ -15,7 +16,7 @@ from service import NormalizerService
 # Configure logging
 logging.basicConfig(
     level=config.LOG_LEVEL,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'  # Remove request_id from format
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 
 # Suppress overly verbose library logs
@@ -41,21 +42,33 @@ service_instance = None
 async def main():
     global service_instance
     logger.info("Initializing Normalizer Service...")
-    db_pool = await init_db()
-    parser_repository = ParserRepository(db_pool)
-    # Create the service instance
-    service_instance = NormalizerService(parser_repository)
+    
+    # Initialize database session
+    db_session = await init_db()
+    
+    try:
+        # Create parser repository with SQLAlchemy session
+        parser_repository = SQLParserRepository(db_session)
+        
+        # Create the service instance
+        service_instance = NormalizerService(parser_repository)
 
-    # Setup signal handlers
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(
-            sig, lambda s=sig: asyncio.create_task(shutdown(s, loop, service_instance))
-        )
+        # Setup signal handlers
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(
+                sig, lambda s=sig: asyncio.create_task(shutdown(s, loop, service_instance))
+            )
 
-    # Run the service's main loop
-    await service_instance.run()
-
+        # Run the service's main loop
+        await service_instance.run()
+    except Exception as e:
+        logger.error(f"Failed to initialize service: {e}")
+        raise
+    finally:
+        # Ensure we close the database session
+        await db_session.close()
+        logger.info("Database session closed")
 
 async def shutdown(signal, loop, service: NormalizerService):
     """Initiates graceful shutdown."""
@@ -65,14 +78,7 @@ async def shutdown(signal, loop, service: NormalizerService):
         # Signal the service to stop its loops
         await service.stop()
 
-    # Optional: Cancel other tasks if any were created directly in main
-    # tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-    # [task.cancel() for task in tasks]
-    # logger.info(f"Cancelling {len(tasks)} outstanding tasks.")
-    # await asyncio.gather(*tasks, return_exceptions=True)
-
     logger.info("Shutdown sequence initiated. Allowing run loop to finish cleanup...")
-    # The run loop's finally block handles client closing now.
 
 if __name__ == "__main__":
     try:

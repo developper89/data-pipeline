@@ -1,28 +1,41 @@
 # shared/db/database.py
 import logging
 from typing import AsyncGenerator
-import asyncpg
 import os
-
-# Get the DATABASE_URL from environment and fix format if needed
-raw_database_url = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost/iot_config")
-# Remove the +asyncpg suffix if present (SQLAlchemy format)
-
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 
 logger = logging.getLogger(__name__)
 
-async def init_db() -> asyncpg.Pool:
+# Get the DATABASE_URL from environment
+database_url = os.getenv("DATABASE_URL")
+if not database_url:
+    raise ValueError("DATABASE_URL environment variable must be set")
+
+# Create async engine
+async_engine = create_async_engine(str(database_url), echo=False)
+
+# Create async session factory
+async_session_factory = async_sessionmaker(
+    bind=async_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
+async def init_db() -> AsyncSession:
+    """
+    Initialize database connection and return a session.
+    For long-running services that need to manage session lifecycle.
+    
+    Returns:
+        AsyncSession: A database session for interacting with the database.
+    """
     try:
-        pool = await asyncpg.create_pool(str(raw_database_url))
-        logger.info(f"Database connection pool created successfully for {raw_database_url.split('@')[1] if '@' in raw_database_url else raw_database_url}")
-        return pool
+        session = async_session_factory()
+        # Test the connection
+        async with session as test_session:
+            await test_session.connection()
+        logger.info(f"Database connection established successfully to {database_url.split('@')[1] if '@' in database_url else database_url}")
+        return session
     except Exception as e:
-        logger.error(f"Failed to create database connection pool: {e}")
+        logger.error(f"Failed to create database connection: {e}")
         raise
-
-
-async def get_db() -> AsyncGenerator[asyncpg.Connection, None]:
-    pool = await init_db()
-    async with pool.acquire() as conn:
-        yield conn
-    await pool.close()

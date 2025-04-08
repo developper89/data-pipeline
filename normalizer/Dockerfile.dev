@@ -7,10 +7,17 @@ RUN apt-get update && \
 
 # Copy requirements first to leverage Docker cache
 COPY requirements.txt .
+COPY docker-entrypoint.sh /usr/local/bin/
+
+# Make entrypoint script executable
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
+
+
 RUN uv pip install --system --no-cache-dir -r requirements.txt
 
 
 # Set PYTHONPATH to include /app
 ENV PYTHONPATH=/app
 
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["python", "/app/normalizer/main.py"] 

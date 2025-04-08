@@ -11,7 +11,8 @@ def generate_request_id():
 
 class CustomBaseModel(BaseModel):
     """Base model with custom JSON serialization for all models in the application."""
-    
+    request_id: str = Field(default_factory=generate_request_id)
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
     model_config = ConfigDict(
         json_encoders={
             datetime: lambda dt: dt.isoformat(),
@@ -51,5 +52,4 @@ class StandardizedOutput(CustomBaseModel):
     values: List[Any]
     label: Optional[List[str]] = None
     index: str = ""
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
     metadata: Dict[str, Any] = Field(default_factory=dict)

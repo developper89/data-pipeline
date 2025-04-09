@@ -7,7 +7,7 @@ import sys
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 from shared.db.database import init_db
-from preservarium_sdk.infrastructure.repository.sql_parser_repository import SQLParserRepository
+from preservarium_sdk.infrastructure.sql_repository.sql_parser_repository import SQLParserRepository
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Ensure other local modules are importable if running as main

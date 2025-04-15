@@ -8,6 +8,9 @@ from contextlib import asynccontextmanager
 from typing import AsyncGenerator
 from shared.db.database import init_db
 from preservarium_sdk.infrastructure.sql_repository.sql_parser_repository import SQLParserRepository
+from preservarium_sdk.infrastructure.sql_repository.sql_datatype_repository import SQLDatatypeRepository
+from preservarium_sdk.infrastructure.sql_repository.sql_field_repository import SQLFieldRepository
+from preservarium_sdk.infrastructure.sql_repository.sql_sensor_repository import SQLSensorRepository
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Ensure other local modules are importable if running as main
@@ -34,17 +37,38 @@ class RequestIdFilter(logging.Filter):
             record.request_id = '-'
         return True
 
-# Create a custom log format handler with filter
-root_logger = logging.getLogger()
-root_logger.addFilter(RequestIdFilter())
+# Add filter to root logger
+logger = logging.getLogger()
+logger.addFilter(RequestIdFilter())
 
-logger = logging.getLogger(__name__)
+# Optional: Add logger to enable specific request tracking in your log messages
+# Example: logger.info(f"[{request_id}] Processing message")
+service_logger = logging.getLogger("normalizer_service")
+
+# Global signal handlers
+SHUTDOWN_SIGNAL_RECEIVED = False
+
+async def setup_signal_handlers(service: NormalizerService) -> None:
+    """Setup handlers for OS signals to handle graceful shutdown."""
+    def handle_signal(sig, frame):
+        global SHUTDOWN_SIGNAL_RECEIVED
+        if SHUTDOWN_SIGNAL_RECEIVED:
+            logger.warning("Second shutdown signal received, forcing exit")
+            sys.exit(1)
+        
+        SHUTDOWN_SIGNAL_RECEIVED = True
+        logger.info(f"Received shutdown signal {sig}, initiating graceful shutdown")
+        # Schedule the service to stop in the event loop
+        asyncio.create_task(service.stop())
+    
+    signal.signal(signal.SIGINT, handle_signal)
+    signal.signal(signal.SIGTERM, handle_signal)
 
 @asynccontextmanager
 async def manage_database() -> AsyncGenerator[AsyncSession, None]:
     """
-    Async context manager for database session lifecycle.
-    Handles initialization and cleanup of database connections.
+    Async context manager for database session.
+    Handles initial connection and cleanup.
     """
     db_session = None
     try:
@@ -65,29 +89,25 @@ async def manage_service(db_session: AsyncSession) -> AsyncGenerator[NormalizerS
     service = None
     try:
         logger.info("Initializing Normalizer Service...")
+        # Initialize repositories
         parser_repository = SQLParserRepository(db_session)
-        service = NormalizerService(parser_repository)
+        datatype_repository = SQLDatatypeRepository(db_session)
+        field_repository = SQLFieldRepository(db_session)
+        sensor_repository = SQLSensorRepository(db_session)
+        
+        # Create service with all repositories for enhanced validation
+        service = NormalizerService(
+            parser_repository=parser_repository,
+            datatype_repository=datatype_repository,
+            field_repository=field_repository,
+            sensor_repository=sensor_repository
+        )
+        
         yield service
     finally:
         if service:
             logger.info("Stopping Normalizer Service...")
             await service.stop()
-
-async def setup_signal_handlers(service: NormalizerService) -> None:
-    """Setup signal handlers for graceful shutdown."""
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(
-            sig, lambda s=sig: asyncio.create_task(handle_shutdown(s, service))
-        )
-
-async def handle_shutdown(sig: signal.Signals, service: NormalizerService) -> None:
-    """Handle shutdown signal."""
-    logger.warning(f"Received exit signal {sig.name}...")
-    await service.stop()
-    # Get the current event loop and stop it
-    loop = asyncio.get_running_loop()
-    loop.stop()
 
 async def run_service() -> None:
     """
@@ -104,17 +124,13 @@ async def run_service() -> None:
         logger.exception("Service stopped due to unexpected error:", exc_info=e)
         raise
 
-def main() -> None:
-    """Entry point for the service."""
+if __name__ == "__main__":
     try:
         asyncio.run(run_service())
     except KeyboardInterrupt:
-        logger.info("Service stopped by user (KeyboardInterrupt).")
+        print("\nExiting due to keyboard interrupt")
     except Exception as e:
-        logger.exception("Service stopped due to unexpected error at top level.", exc_info=e)
+        logger.exception("Fatal error in main:", exc_info=e)
         sys.exit(1)
     finally:
-        logger.info("Service process finished.")
-
-if __name__ == "__main__":
-    main()
+        logger.info("Normalizer service shutdown complete.")

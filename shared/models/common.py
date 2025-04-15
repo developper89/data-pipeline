@@ -53,3 +53,13 @@ class StandardizedOutput(CustomBaseModel):
     label: Optional[List[str]] = None
     index: str = ""
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+class ValidatedOutput(CustomBaseModel):
+    """
+    Represents validated sensor readings with a consistent structure,
+    but without metadata fields. Used for final output after validation.
+    """
+    device_id: str
+    values: List[Any]
+    label: Optional[List[str]] = None
+    index: str = ""

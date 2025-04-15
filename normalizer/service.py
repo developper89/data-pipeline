@@ -4,7 +4,8 @@ import json
 import asyncio  # Needed if using async DB/Script clients
 import os
 import signal
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, Tuple
+from datetime import datetime
 
 from kafka import KafkaConsumer, KafkaProducer  # Still need KafkaProducer for creation
 from kafka.errors import KafkaError
@@ -18,17 +19,28 @@ from shared.mq.kafka_helpers import (
 from shared.models.common import (
     RawMessage,
     StandardizedOutput,
+    ValidatedOutput,
     ErrorMessage,
     generate_request_id,
 )
 from preservarium_sdk.infrastructure.sql_repository.sql_parser_repository import (
     SQLParserRepository,
 )
+from preservarium_sdk.infrastructure.sql_repository.sql_datatype_repository import (
+    SQLDatatypeRepository,
+)
+from preservarium_sdk.infrastructure.sql_repository.sql_field_repository import (
+    SQLFieldRepository,
+)
+from preservarium_sdk.infrastructure.sql_repository.sql_sensor_repository import (
+    SQLSensorRepository,
+)
 
 
 # Import local components
 from kafka_producer import NormalizerKafkaProducer  # Import the new wrapper
 from script_client import ScriptClient, ScriptNotFoundError
+from normalizer.validator import Validator  # Import the validator
 
 import config
 
@@ -38,8 +50,17 @@ logger.setLevel(config.LOG_LEVEL)
 
 
 class NormalizerService:
-    def __init__(self, parser_repository: SQLParserRepository):
+    def __init__(
+        self, 
+        parser_repository: SQLParserRepository,
+        datatype_repository: Optional[SQLDatatypeRepository] = None,
+        field_repository: Optional[SQLFieldRepository] = None,
+        sensor_repository: Optional[SQLSensorRepository] = None
+    ):
         self.parser_repository = parser_repository
+        self.datatype_repository = datatype_repository
+        self.field_repository = field_repository
+        self.sensor_repository = sensor_repository
         self.consumer: Optional[KafkaConsumer] = None
         # Use the dedicated wrapper for producing messages
         self.kafka_producer: Optional[NormalizerKafkaProducer] = None
@@ -47,6 +68,15 @@ class NormalizerService:
         self.script_client = ScriptClient(
             storage_type=config.SCRIPT_STORAGE_TYPE, local_dir=config.LOCAL_SCRIPT_DIR
         )
+        
+        # Initialize validator if repositories are provided
+        self.validator = None
+        if datatype_repository and field_repository:
+            self.validator = Validator(datatype_repository, field_repository)
+            logger.info("Validator initialized with datatype and field repositories")
+        else:
+            logger.warning("Validator not initialized - repositories not provided")
+            
         self._running = False
         self._stop_event = (
             asyncio.Event()
@@ -197,27 +227,84 @@ class NormalizerService:
             # 5. Construct and Validate Standardized Output
             try:
                 standardized_data_list = []
-                for parser_output_dict in parser_output_list:
-                    # if 'device_id' not in parser_output_dict:
-                    #     parser_output_dict['device_id'] = raw_message.device_id
-
-                    standardized_data = StandardizedOutput(**parser_output_dict)
-                    standardized_data.device_id = raw_message.device_id
-                    standardized_data.request_id = request_id
-                    standardized_data.timestamp = raw_message.timestamp
-                    standardized_data_list.append(standardized_data)
-                # logger.debug(f"[{request_id}] Standardized output: {standardized_data_list}")
-                logger.debug(f"[{request_id}] Validated standardized output.")
+                all_validation_errors = []
+                
+                # Get all datatypes for this device (via hardware association)
+                device_datatypes = await self._get_device_datatypes(raw_message.device_id, request_id)
+                
+                if device_datatypes:
+                    logger.debug(f"[{request_id}] Found {len(device_datatypes)} datatypes for device {raw_message.device_id}")
+                    
+                    # Parse and validate each SensorReading object from the parser output
+                    for sensor_reading in parser_output_list:
+                        # Ensure device_id is set if missing
+                        if not hasattr(sensor_reading, 'device_id') or not sensor_reading.device_id:
+                            sensor_reading.device_id = raw_message.device_id
+                            
+                        # Convert SensorReading to StandardizedOutput first
+                        standardized_data = StandardizedOutput(
+                            device_id=sensor_reading.device_id,
+                            values=sensor_reading.values,
+                            label=sensor_reading.label,
+                            index=sensor_reading.index,
+                            metadata=sensor_reading.metadata,
+                            request_id=request_id,
+                            timestamp=getattr(sensor_reading, 'timestamp', raw_message.timestamp)
+                        )
+                            
+                        # Apply validation using the index in the SensorReading
+                        valid_outputs, validation_errors = await self._apply_validation(
+                            raw_message.device_id,
+                            device_datatypes,
+                            standardized_data,
+                            request_id
+                        )
+                        
+                        # Add valid outputs to the list
+                        standardized_data_list.extend(valid_outputs)
+                        
+                        # Track validation errors
+                        all_validation_errors.extend(validation_errors)
+                
+                # 5.2 Publish validation errors if any
+                if all_validation_errors:
+                    logger.warning(f"[{request_id}] Found {len(all_validation_errors)} validation errors")
+                    for error in all_validation_errors:
+                        # Add request_id if not already present
+                        if not error.request_id:
+                            error.request_id = request_id
+                        # Publish error
+                        self.kafka_producer.publish_error(error)
+                
+                if not standardized_data_list:
+                    # Handle case where all outputs were invalid
+                    if all_validation_errors:
+                        logger.error(f"[{request_id}] All outputs failed validation for device {raw_message.device_id}")
+                        # We've already published individual errors, so we're done
+                        return True
+                    else:
+                        # No valid outputs and no errors - this is strange
+                        logger.error(f"[{request_id}] No valid outputs and no validation errors for device {raw_message.device_id}")
+                        await self._publish_processing_error(
+                            "Empty Validation Result",
+                            error="No valid outputs produced and no validation errors reported",
+                            original_message=job_dict,
+                            request_id=request_id,
+                            topic_details=(topic, partition, offset),
+                        )
+                        return True
+                
+                logger.debug(f"[{request_id}] Validated {len(standardized_data_list)} standardized outputs.")
             except (ValidationError, TypeError) as e:
                 logger.error(
-                    f"[{request_id}] Parser script output failed validation for device {raw_message.device_id}: {e}\nOutput: {parser_output_dict}"
+                    f"[{request_id}] Parser script output failed validation for device {raw_message.device_id}: {e}\nOutput: {parser_output_list}"
                 )
                 await self._publish_processing_error(
                     "Parser Output Validation Error",
                     error=str(e),
                     original_message=job_dict,
                     request_id=request_id,
-                    details={"parser_output": parser_output_dict},
+                    details={"parser_output": parser_output_list},
                     topic_details=(topic, partition, offset),
                 )
                 error_published = True
@@ -289,6 +376,100 @@ class NormalizerService:
                 # Returning False will cause Kafka to redeliver the message, potentially leading to a loop
                 # if the error is persistent. Consider alternative alerting/dead-letter queue strategy here.
                 return False  # Indicate failure to process AND failure to publish error
+                
+    async def _get_device_datatypes(self, device_id: str, request_id: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get all datatypes for a device using the sensor repository and datatype repository.
+        Returns a dictionary where keys are datatype_index values and values are datatype models.
+        
+        Args:
+            device_id: The device ID (sensor parameter) to get datatypes for
+            request_id: Optional request ID for logging
+            
+        Returns:
+            Dictionary mapping datatype_index to datatype models
+        """
+        try:
+                
+            # Find the sensor using parameter field
+            sensor = await self.sensor_repository.find_one_by(parameter=device_id)
+            if not sensor:
+                logger.warning(f"[{request_id}] No sensor found with parameter {device_id}")
+                return {}
+                
+            # Now get datatypes using the sensor's ID
+            logger.info(f"[{request_id}] Found sensor with ID {sensor.id} for parameter {device_id}")
+            datatypes = await self.datatype_repository.get_sensor_datatypes_ordered(sensor.id)
+            
+            # Create a map of datatype_index -> datatype
+            datatype_map = {}
+            for datatype in datatypes:
+                if hasattr(datatype, 'datatype_index') and datatype.datatype_index:
+                    datatype_map[datatype.datatype_index] = datatype
+            
+            return datatype_map
+        except Exception as e:
+            logger.error(f"[{request_id}] Error fetching datatypes for device {device_id}: {e}")
+            return {}
+            
+    async def _apply_validation(
+        self,
+        device_id: str,
+        datatype_map: Dict[str, Any],
+        standardized_data: StandardizedOutput,
+        request_id: Optional[str] = None
+    ) -> Tuple[List[StandardizedOutput], List[ErrorMessage]]:
+        """
+        Apply validation to StandardizedOutput object using the correct datatype based on index.
+        
+        Args:
+            device_id: The device ID
+            datatype_map: Dictionary mapping datatype_index to datatype models
+            standardized_data: StandardizedOutput object with device_id, values, index, etc.
+            request_id: Optional request ID
+            
+        Returns:
+            Tuple of valid standardized outputs and validation errors
+        """
+        valid_outputs = []
+        all_errors = []
+        
+        # Get index from StandardizedOutput
+        index = standardized_data.index
+        
+        try:
+            # Find the matching datatype by index from the map
+            if index and index in datatype_map:
+                matching_datatype = datatype_map[index]
+                logger.debug(f"[{request_id}] Found matching datatype {matching_datatype.id} with datatype_index {index}")
+                
+                # Validate against the found datatype - pass the datatype object directly
+                validated_output, validation_errors = await self.validator.validate_and_normalize(
+                    device_id=device_id,
+                    datatype_id=str(matching_datatype.id),
+                    standardized_data=standardized_data,
+                    request_id=request_id,
+                    datatype=matching_datatype
+                )
+                
+                # Add validation errors to the list
+                all_errors.extend(validation_errors)
+                
+                # Add valid output if any
+                if validated_output:
+                    valid_outputs.append(validated_output)
+                
+                return valid_outputs, all_errors
+        except Exception as e:
+            logger.error(f"[{request_id}] Error during validation lookup: {e}")
+            error_msg = ErrorMessage(
+                request_id=request_id,
+                error=f"Validation lookup error: {str(e)}",
+                original_message={"device_id": device_id, "standardized_data_index": standardized_data.index},
+            )
+            all_errors.append(error_msg)
+                    
+        return valid_outputs, all_errors
 
     async def _publish_processing_error(
         self,

@@ -20,6 +20,10 @@ DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost/iot_c
 SCRIPT_STORAGE_TYPE = os.getenv("SCRIPT_STORAGE_TYPE", "local") # 'local' or 's3'
 LOCAL_SCRIPT_DIR = os.getenv("LOCAL_SCRIPT_DIR", "../storage/parser_scripts")
 
+# Validation Config
+USE_ENHANCED_VALIDATION = os.getenv("USE_ENHANCED_VALIDATION", "true").lower() in ('true', 'yes', '1')
+
 # Service Config
+# LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 SERVICE_NAME = "normalizer"

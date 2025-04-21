@@ -50,12 +50,36 @@ class Validator:
         # 2. Get validation parameters from datatypes_data
         validation_params = await self._get_validation_params(datatype_id)
         
-        # 3. Validate all values against the datatype
-        type_valid, converted_values, type_errors = self._validate_type(
-            standardized_data.values, 
-            datatype.data_type
+        # Values to be processed
+        values = standardized_data.values
+        
+        # 3. Apply any parsing operations first
+        parsing_applied = False
+        
+        parsing_valid, parsed_values, parsing_errors = self._apply_parsing_operations(
+            values,
+            validation_params
         )
         
+        # Add any parsing operation errors
+        for error_msg in parsing_errors:
+            errors.append(ErrorMessage(
+                error=error_msg,
+                original_message={"device_id": device_id},
+                request_id=request_id
+            ))
+        
+        if parsing_valid and parsed_values:
+            # Use the parsed values for further validation
+            values = parsed_values
+            parsing_applied = True
+        logger.debug(f"parsing_applied: {parsing_applied}, parsed_values: {parsed_values}")
+        # 4. Validate all values against the datatype
+        type_valid, converted_values, type_errors = self._validate_type(
+            values, 
+            datatype.data_type
+        )
+        logger.debug(f"type_valid: {type_valid}, converted_values: {converted_values}, type_errors: {type_errors}")
         # Add any type validation errors
         for error_msg in type_errors:
             errors.append(ErrorMessage(
@@ -64,12 +88,12 @@ class Validator:
                 request_id=request_id
             ))
         
-        # 4. Validate range for all values
+        # 5. Validate range for all values
         range_valid, range_results, range_errors = self._validate_range(
             converted_values,
             validation_params
         )
-        
+        logger.debug(f"range_valid: {range_valid}, range_results: {range_results}, range_errors: {range_errors}")
         # Add any range validation errors
         for error_msg in range_errors:
             errors.append(ErrorMessage(
@@ -78,18 +102,18 @@ class Validator:
                 request_id=request_id
             ))
         
-        # 6. Build standardized output if all validations pass or if partial validation is allowed
-        if (type_valid and range_valid) or self._allow_partial_validation(validation_params):
+        # 6. Build validated output if all validations pass
+        if (type_valid and range_valid):
             # Apply any needed transformations
-            normalized_output = self._build_standardized_output(
+            validated_output = self._build_validated_output(
                 device_id, 
                 datatype,
                 converted_values,
-                validation_params,
                 request_id,
-                standardized_data.timestamp
+                standardized_data,
+                validation_params
             )
-            return normalized_output, errors
+            return validated_output, errors
         
         return None, errors
     
@@ -202,7 +226,7 @@ class Validator:
                 continue
             
             try:
-                if expected_type.lower() == 'float':
+                if expected_type.lower() == 'number':
                     converted_values.append(float(value))
                 elif expected_type.lower() == 'integer':
                     converted_values.append(int(float(value)))
@@ -226,113 +250,108 @@ class Validator:
                 all_valid = False
         
         return all_valid, converted_values, error_messages
-               
-    def _allow_partial_validation(self, validation_params: Dict) -> bool:
-        """
-        Determine if partial validation is allowed based on configuration.
-        
-        Args:
-            validation_params: Dictionary of validation parameters
-            
-        Returns:
-            True if partial validation is allowed, False otherwise
-        """
-        # Check for a specific flag in validation parameters
-        partial_validation = validation_params.get("Validation partielle", "false")
-        return partial_validation.lower() in ('true', 'yes', '1')
-            
-    def _build_standardized_output(
+                
+    def _build_validated_output(
         self, 
         device_id: str, 
         datatype: Any, 
         converted_values: List[Any], 
-        validation_params: Dict,
         request_id: Optional[str] = None,
-        timestamp: Optional[datetime] = None
-    ) -> StandardizedOutput:
+        standardized_data: Optional[StandardizedOutput] = None,
+        validation_params: Optional[Dict] = None
+    ) -> ValidatedOutput:
         """
-        Build a StandardizedOutput object from validated data.
+        Build a ValidatedOutput object from validated data.
         Also creates a ValidatedOutput object for internal validation tracking.
         
         Args:
             device_id: The device ID
             datatype: The datatype model
             converted_values: List of validated and converted values
-            validation_params: Dictionary of validation parameters
             request_id: Optional request ID
-            timestamp: Optional timestamp
-            
+            standardized_data: Optional StandardizedOutput object
         Returns:
-            StandardizedOutput object with validated data
+            ValidatedOutput object with validated data
         """
-        if timestamp is None:
-            timestamp = datetime.utcnow()
-        
-        # Apply scaling to each value
-        scaled_values = [self._apply_scaling(value, validation_params) for value in converted_values]
-        
         # Get unit label from datatype if available
         label = []
-        if hasattr(datatype, 'unit') and datatype.unit:
-            label.append(datatype.unit)
+        if standardized_data.label:
+            label = standardized_data.label
+        elif datatype.label:
+            label = json.loads(datatype.label)
         
         # Build metadata with validation info
         metadata = {
             "datatype_id": str(datatype.id) if hasattr(datatype, 'id') else None,
             "datatype_name": datatype.name if hasattr(datatype, 'name') else None,
-            "validation_timestamp": datetime.utcnow().isoformat(),
-            "validation_status": "valid"
+            "datatype_unit": validation_params.get("unit", None)
         }
-        
-        # Add original unit if conversion was applied
-        if validation_params.get("Original unit"):
-            metadata["original_unit"] = validation_params.get("Original unit")
-        
+
         # Create ValidatedOutput for internal tracking (no metadata)
         validated_output = ValidatedOutput(
             device_id=device_id,
-            values=scaled_values,
-            label=label,
-            index=datatype.datatype_index if hasattr(datatype, 'datatype_index') else "",
-            request_id=request_id,
-            timestamp=timestamp
-        )
-        
-        # Create StandardizedOutput for external output (includes metadata)
-        standardized_output = StandardizedOutput(
-            device_id=device_id,
-            values=scaled_values,
+            values=converted_values,
             label=label,
             index=datatype.datatype_index if hasattr(datatype, 'datatype_index') else "",
             metadata=metadata,
             request_id=request_id,
-            timestamp=timestamp
+            timestamp=standardized_data.timestamp
         )
+        logger.debug(f"Created validated output: {validated_output}")
         
-        logger.debug(f"Created standardized output with values: {scaled_values} and metadata: {metadata}")
-        return standardized_output
-        
-    def _apply_scaling(self, value: Any, validation_params: Dict) -> Any:
+        return validated_output
+
+    def _apply_parsing_operations(self, values: List[Any], validation_params: Dict) -> Tuple[bool, List[Any], List[str]]:
         """
-        Apply scaling to the value based on validation parameters.
+        Apply parsing operations to values based on the operation parameter.
         
         Args:
-            value: The value to scale
+            values: List of values to apply operations to
             validation_params: Dictionary of validation parameters
             
         Returns:
-            Scaled value
+            Tuple of (success, parsed_values, error_messages)
         """
-        if value is None:
-            return None
+        if not values:
+            return True, [], []
         
-        scaling_factor = validation_params.get("Facteur d'échelle")
+        # Look for the operation parameter - it might be under 'operation' key
+        parsing_op = validation_params.get("parsing_op")
+        if not parsing_op:
+            # No operation to apply
+            return True, values, []
         
-        if scaling_factor is not None:
-            try:
-                factor = float(scaling_factor)
-                return float(value) * factor
-            except (ValueError, TypeError):
-                logger.warning(f"Failed to apply scaling factor: {scaling_factor} to value: {value}")
-                
-        return value 
+        # Initialize result variables
+        success = True
+        parsed_values = []
+        error_messages = []
+        
+        try:
+            # Process each value with the parsing operation formula
+            for i, value in enumerate(values):
+                if value is None:
+                    parsed_values.append(None)
+                    continue
+                    
+                try:
+                    # Replace %val% in the formula with the actual value
+                    formula = parsing_op.replace("%val%", str(value))
+                    
+                    # Evaluate the formula safely
+                    # This handles operations like "(%val%/100)" or "(%val%-10000)/100"
+                    result = eval(formula, {"__builtins__": {}})
+                    parsed_values.append(result)
+                    
+                    logger.debug(f"Applied operation '{parsing_op}' to value '{value}' with result: {result}")
+                    
+                except (ValueError, TypeError, SyntaxError, NameError) as e:
+                    error_messages.append(f"Failed to apply operation '{parsing_op}' to value '{value}': {str(e)}")
+                    parsed_values.append(value)  # Keep original value
+                    success = False
+                    
+        except Exception as e:
+            # Handle unexpected errors
+            error_messages.append(f"Error applying operation: {str(e)}")
+            return False, values, error_messages
+        
+        return success, parsed_values, error_messages

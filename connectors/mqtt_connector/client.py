@@ -210,7 +210,7 @@ class MQTTClientWrapper:
 
     def on_message(self, client, userdata, msg):
         try:
-            logger.debug(f"Received message on topic '{msg.topic}' (QoS {msg.qos})")
+            
             
             topic_parts = msg.topic.split('/')
             if len(topic_parts) >= 2 and topic_parts[0] == 'broker_data' and topic_parts[-1] == 'data':
@@ -221,10 +221,13 @@ class MQTTClientWrapper:
 
             payload_bytes = msg.payload
             
-            # Create RawMessage - ensuring the payload is handled as bytes
+            # Convert binary payload to hex string to match RawMessage model expectation
+            payload_str = payload_bytes.hex() if isinstance(payload_bytes, bytes) else str(payload_bytes)
+            
+            # Create RawMessage - with payload as string
             raw_message = RawMessage(
                 device_id=device_id,
-                payload=payload_bytes,  # will be handled by DateTimeEncoder
+                payload_hex=payload_str,  # Updated field name from payload to payload_hex
                 protocol="mqtt",
                 metadata={
                     "mqtt_topic": msg.topic,
@@ -232,6 +235,9 @@ class MQTTClientWrapper:
                     "mqtt_retain": msg.retain,
                 }
             )
+            if device_id == "2207001":
+                logger.info(f"Received message on topic '{msg.topic}' (QoS {msg.qos})")
+                logger.info(f"payload_hex is: {raw_message.payload_hex}")
             
             # Publish to Kafka
             self.kafka_producer.publish_raw_message(raw_message)

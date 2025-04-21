@@ -11,9 +11,11 @@ import config
 
 # Configure logging
 logging.basicConfig(
-    level=config.LOG_LEVEL,
+    # level=config.LOG_LEVEL,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+
 # Suppress overly verbose library logs if desired
 # logging.getLogger("kafka").setLevel(logging.WARNING)
 

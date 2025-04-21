@@ -34,7 +34,7 @@ class BaseMessage(CustomBaseModel):
 
 class RawMessage(BaseMessage):
     device_id: str
-    payload: bytes # Payload bytes will be hex-encoded in JSON
+    payload_hex: str  # Renamed from 'payload' to reflect hex-encoded binary data sent through Kafka
     protocol: str   # e.g., 'mqtt', 'coap'
     metadata: dict = {} # Optional extra metadata from gateway
 
@@ -63,3 +63,4 @@ class ValidatedOutput(CustomBaseModel):
     values: List[Any]
     label: Optional[List[str]] = None
     index: str = ""
+    metadata: Dict[str, Any] = Field(default_factory=dict)

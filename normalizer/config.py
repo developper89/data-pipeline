@@ -7,7 +7,7 @@ load_dotenv()
 # Kafka Config
 KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
 KAFKA_RAW_DATA_TOPIC = os.getenv("KAFKA_RAW_DATA_TOPIC", "iot_raw_data")
-KAFKA_STANDARDIZED_DATA_TOPIC = os.getenv("KAFKA_STANDARDIZED_DATA_TOPIC", "iot_standardized_data")
+KAFKA_VALIDATED_DATA_TOPIC = os.getenv("KAFKA_VALIDATED_DATA_TOPIC", "iot_validated_data")
 KAFKA_ERROR_TOPIC = os.getenv("KAFKA_ERROR_TOPIC", "iot_errors")
 KAFKA_CONSUMER_GROUP_ID = os.getenv("KAFKA_CONSUMER_GROUP_ID", "normalizer_group")
 # Time in seconds consumer waits for messages if buffer is empty

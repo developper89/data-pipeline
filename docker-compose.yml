@@ -37,7 +37,7 @@ services:
       # Kafka Configuration
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - KAFKA_RAW_DATA_TOPIC=iot_raw_data
-      - KAFKA_STANDARDIZED_DATA_TOPIC=iot_standardized_data
+      - KAFKA_VALIDATED_DATA_TOPIC=iot_validated_data
       - KAFKA_ERROR_TOPIC=iot_errors
       - KAFKA_CONSUMER_GROUP_ID=normalizer_group
       - KAFKA_CONSUMER_POLL_TIMEOUT_S=1.0

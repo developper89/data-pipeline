@@ -8,7 +8,8 @@ import os
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
-
+logging.getLogger("kafka").setLevel(logging.WARNING)
+logger.setLevel(logging.INFO)
 class DateTimeEncoder(json.JSONEncoder):
     """Custom JSON encoder that handles datetime objects."""
     def default(self, obj):
@@ -78,7 +79,7 @@ def publish_message(producer: KafkaProducer, topic: str, value: dict, key: str =
         if hasattr(value, '__dict__') and hasattr(value, 'model_dump'):
             # This is likely a Pydantic model
             value = model_to_dict(value)
-            
+
         key_bytes = key.encode('utf-8') if key else None
         future = producer.send(topic, value=value, key=key_bytes)
         # Optional: Block until message is sent (synchronous)

@@ -99,7 +99,7 @@ class NormalizerService:
         job_dict: Optional[dict] = None  # Keep original dict for error reporting
         request_id: Optional[str] = None
         error_published = False  # Flag to track if an error was successfully published
-
+        
         try:
             # 1. Deserialize and Validate Input RawMessage
             try:
@@ -107,10 +107,12 @@ class NormalizerService:
                 if "request_id" not in job_dict:
                     job_dict["request_id"] = generate_request_id()
                 raw_message = RawMessage(**job_dict)
+                if raw_message.device_id == "2207001":
+                    logger.info(f"raw message device_id : {raw_message.device_id}, payload_hex: {raw_message.payload_hex}")
                 request_id = raw_message.request_id
-                logger.debug(
-                    f"[{request_id}] Validated RawMessage for device: {raw_message.device_id}"
-                )
+                # logger.debug(
+                #     f"[{request_id}] Validated RawMessage for device: {raw_message.device_id}"
+                # )
             except (ValidationError, TypeError) as e:
                 logger.error(
                     f"Invalid RawMessage format received: {e}. Value: {msg_value}"
@@ -135,7 +137,7 @@ class NormalizerService:
                 if parser is None:
                     # logger.debug(f"[{request_id}] No config found for {raw_message.device_id}")
                     return True  # Indicate error was handled
-                logger.debug(
+                logger.info(
                     f"[{request_id}] Found config for {raw_message.device_id}: script={parser.file_path}"
                 )
 
@@ -189,11 +191,17 @@ class NormalizerService:
             # 4. Execute script in Sandbox
             try:
                 if hasattr(script_module, "parse"):
-                    print("Starting parser ...")
+                    logger.info(f"Starting parser module {script_module} ...")
+                    
+                    # Convert hex string payload back to bytes for parser
+                    payload_bytes = bytes.fromhex(raw_message.payload_hex) if raw_message.payload_hex else b''
+                    
                     parser_output_list = script_module.parse(
-                        payload=raw_message.payload,
+                        payload=payload_bytes,  # Pass bytes to parser, not the hex string
                         config=parser,  # Pass the fetched config
                     )
+                    # logger.info(f"parser output: {parser_output_list}")
+                    # logger.info(f"[{request_id}] Parser output for payload: {raw_message.payload}: {parser_output_list} ")
                     logger.debug(
                         f"[{request_id}] Script execution completed. Got {len(parser_output_list)} records."
                     )
@@ -226,28 +234,30 @@ class NormalizerService:
 
             # 5. Construct and Validate Standardized Output
             try:
-                standardized_data_list = []
+                validated_data_list = []
                 all_validation_errors = []
                 
                 # Get all datatypes for this device (via hardware association)
-                device_datatypes = await self._get_device_datatypes(raw_message.device_id, request_id)
                 
+                device_datatypes = await self._get_device_datatypes(raw_message.device_id, request_id)
+
                 if device_datatypes:
                     logger.debug(f"[{request_id}] Found {len(device_datatypes)} datatypes for device {raw_message.device_id}")
                     
                     # Parse and validate each SensorReading object from the parser output
                     for sensor_reading in parser_output_list:
+                        
                         # Ensure device_id is set if missing
                         if not hasattr(sensor_reading, 'device_id') or not sensor_reading.device_id:
-                            sensor_reading.device_id = raw_message.device_id
+                            sensor_reading["device_id"] = raw_message.device_id
                             
                         # Convert SensorReading to StandardizedOutput first
                         standardized_data = StandardizedOutput(
-                            device_id=sensor_reading.device_id,
-                            values=sensor_reading.values,
-                            label=sensor_reading.label,
-                            index=sensor_reading.index,
-                            metadata=sensor_reading.metadata,
+                            device_id=sensor_reading["device_id"],
+                            values=sensor_reading["values"],
+                            label=sensor_reading["label"],
+                            index=sensor_reading["index"],
+                            metadata=sensor_reading["metadata"],
                             request_id=request_id,
                             timestamp=getattr(sensor_reading, 'timestamp', raw_message.timestamp)
                         )
@@ -261,7 +271,7 @@ class NormalizerService:
                         )
                         
                         # Add valid outputs to the list
-                        standardized_data_list.extend(valid_outputs)
+                        validated_data_list.extend(valid_outputs)
                         
                         # Track validation errors
                         all_validation_errors.extend(validation_errors)
@@ -276,7 +286,7 @@ class NormalizerService:
                         # Publish error
                         self.kafka_producer.publish_error(error)
                 
-                if not standardized_data_list:
+                if not validated_data_list:
                     # Handle case where all outputs were invalid
                     if all_validation_errors:
                         logger.error(f"[{request_id}] All outputs failed validation for device {raw_message.device_id}")
@@ -294,7 +304,7 @@ class NormalizerService:
                         )
                         return True
                 
-                logger.debug(f"[{request_id}] Validated {len(standardized_data_list)} standardized outputs.")
+                logger.debug(f"[{request_id}] Validated {len(validated_data_list)} validated outputs.")
             except (ValidationError, TypeError) as e:
                 logger.error(
                     f"[{request_id}] Parser script output failed validation for device {raw_message.device_id}: {e}\nOutput: {parser_output_list}"
@@ -332,11 +342,11 @@ class NormalizerService:
                     )
                     return False  # Indicate failure, cannot proceed
 
-                for standardized_data in standardized_data_list:
-                    self.kafka_producer.publish_standardized_data(standardized_data)
+                for validated_data in validated_data_list:
+                    self.kafka_producer.publish_validated_data(validated_data)
                     # Success logging is now typically within the wrapper or can be added here if preferred
                     logger.info(
-                        f"[{request_id}] Published standardized data for device {standardized_data.device_id}"
+                        f"[{request_id}] Published validated data for device {validated_data.device_id}"
                     )
                 return True  # Success!
 

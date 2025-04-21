@@ -7,7 +7,7 @@ from kafka.errors import KafkaError
 
 # Import shared components
 from shared.mq.kafka_helpers import publish_message # Use the generic helper
-from shared.models.common import StandardizedOutput, ErrorMessage
+from shared.models.common import ErrorMessage, ValidatedOutput
 
 # Import local config
 import config
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class NormalizerKafkaProducer:
     """
     A wrapper around KafkaProducer specifically for the Normalizer Service.
-    Handles publishing StandardizedOutput and ErrorMessage to the correct topics.
+    Handles publishing ValidatedOutput and ErrorMessage to the correct topics.
     """
     def __init__(self, producer: KafkaProducer):
         """
@@ -28,34 +28,34 @@ class NormalizerKafkaProducer:
         self.producer = producer
         logger.info("NormalizerKafkaProducer initialized.")
 
-    def publish_standardized_data(self, message: StandardizedOutput):
+    def publish_validated_data(self, message: ValidatedOutput):
         """
-        Publishes a StandardizedOutput message to the configured standardized data topic.
+        Publishes a ValidatedOutput message to the configured validated data topic.
 
         Args:
-            message: The StandardizedOutput object to publish.
+            message: The ValidatedOutput object to publish.
 
         Raises:
             KafkaError: If publishing fails due to Kafka-related issues.
             Exception: For other unexpected publishing errors.
         """
-        if not isinstance(message, StandardizedOutput):
-            raise TypeError("Message must be an instance of StandardizedOutput")
+        if not isinstance(message, ValidatedOutput):
+            raise TypeError("Message must be an instance of ValidatedOutput")
 
         try:
-            # Use device_id as the key for partitioning standardized data
+            # Use device_id as the key for partitioning validated data
             key = message.device_id
-            topic = config.KAFKA_STANDARDIZED_DATA_TOPIC
+            topic = config.KAFKA_VALIDATED_DATA_TOPIC
             value = message.model_dump() # Convert Pydantic model to dict
 
-            logger.debug(f"[{message.request_id}] Publishing StandardizedOutput to topic '{topic}' with key '{key}'")
+            logger.debug(f"[{message.request_id}] Publishing ValidatedOutput to topic '{topic}' with key '{key}'")
             publish_message(self.producer, topic, value, key)
             # publish_message helper already logs success/failure at debug/error level
         except KafkaError as e:
-            logger.error(f"[{message.request_id}] Failed to publish StandardizedOutput to Kafka topic '{topic}': {e}")
+            logger.error(f"[{message.request_id}] Failed to publish ValidatedOutput to Kafka topic '{topic}': {e}")
             raise # Re-raise Kafka specific errors for caller to handle
         except Exception as e:
-            logger.exception(f"[{message.request_id}] Unexpected error publishing StandardizedOutput to Kafka topic '{topic}': {e}")
+            logger.exception(f"[{message.request_id}] Unexpected error publishing ValidatedOutput to Kafka topic '{topic}': {e}")
             raise # Re-raise other errors
 
     def publish_error(self, message: ErrorMessage):

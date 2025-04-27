@@ -49,7 +49,6 @@ class Validator:
         
         # 2. Get validation parameters from datatypes_data
         validation_params = await self._get_validation_params(datatype_id)
-        
         # Values to be processed
         values = standardized_data.values
         
@@ -284,7 +283,8 @@ class Validator:
         metadata = {
             "datatype_id": str(datatype.id) if hasattr(datatype, 'id') else None,
             "datatype_name": datatype.name if hasattr(datatype, 'name') else None,
-            "datatype_unit": validation_params.get("unit", None)
+            "datatype_unit": validation_params.get("unit", None),
+            "persist": datatype.persist if hasattr(datatype, 'persist') else True,
         }
 
         # Create ValidatedOutput for internal tracking (no metadata)
@@ -297,7 +297,6 @@ class Validator:
             request_id=request_id,
             timestamp=standardized_data.timestamp
         )
-        logger.debug(f"Created validated output: {validated_output}")
         
         return validated_output
 

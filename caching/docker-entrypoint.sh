@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-uv pip install --system -e /app/packages/preservarium-sdk[dev,core]
+uv pip install --system -e /app/packages/preservarium-sdk[dev,core,cache]
 # Print environment for debugging (exclude sensitive info)
 echo "Starting Cache Service"
 echo "Kafka Bootstrap Servers: $KAFKA_BOOTSTRAP_SERVERS"

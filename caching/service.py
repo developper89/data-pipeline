@@ -1,16 +1,23 @@
 import logging
 import json
 import asyncio
-from typing import Dict, Any, Optional
 import time
+from typing import Dict, Any, List, Optional
+from datetime import datetime
 from kafka import KafkaConsumer, KafkaError
 from shared.models.common import ValidatedOutput, generate_request_id
 from shared.mq.kafka_helpers import create_kafka_consumer
 import config
-from redis_client import RedisClient
-from metadata_cache import MetadataCache
+
+# Import the SDK components
+from preservarium_sdk.core.config import RedisSettings
+from preservarium_sdk.infrastructure.redis_repository.redis_base_repository import RedisBaseRepository
+
+# Import local components
+from caching.metadata_cache import MetadataCache
 
 logger = logging.getLogger("cache_service.service")
+
 
 class CacheService:
     """
@@ -22,8 +29,26 @@ class CacheService:
         """Initialize the cache service."""
         self.running = False
         self.consumer = None
-        self.redis_client = RedisClient()
-        self.metadata_cache = MetadataCache(self.redis_client)
+        
+        # Initialize Redis cache components from the SDK
+        redis_config = RedisSettings(
+            host=config.REDIS_HOST,
+            port=config.REDIS_PORT,
+            db=config.REDIS_DB,
+            password=config.REDIS_PASSWORD,
+            metadata_ttl=config.REDIS_METADATA_TTL
+        )
+        
+        # Create the Redis repository
+        self.redis_repository = RedisBaseRepository(
+            config=redis_config
+        )
+        
+        # Create the device metadata cache service
+        self.metadata_cache = MetadataCache(
+            redis_repository=self.redis_repository
+        )
+        
         self._stop_event = asyncio.Event()
         
     async def initialize(self) -> bool:
@@ -33,6 +58,12 @@ class CacheService:
         """
         logger.info("Initializing Cache Service")
         
+        # Initialize Redis connection
+        redis_connected = await self.redis_repository.ensure_connected()
+        if not redis_connected:
+            logger.error("Failed to connect to Redis")
+            return False
+            
         # Initialize Kafka consumer
         try:
             logger.info("Initializing Kafka consumer")
@@ -155,8 +186,8 @@ class CacheService:
                 logger.error(f"[{request_id}] Invalid ValidatedOutput format: {str(e)}")
                 return True  # Consider invalid message as processed (won't retry)
                 
-            # Cache the metadata
-            success = self.metadata_cache.cache_metadata(validated_output)
+            # Cache the metadata using the cache service
+            success = await self.metadata_cache.cache_validated_output(validated_output)
             
             # Always return True even if caching fails - we don't want to block the pipeline
             # for caching errors, just log them
@@ -190,8 +221,7 @@ class CacheService:
         self._stop_event.set()
         
         # Close Redis connection
-        if hasattr(self, 'redis_client') and self.redis_client:
-            self.redis_client.close()
+        await self.metadata_cache.close()
         
         # Consumer will be closed in the run loop's finally block
         logger.info("Cache Service stopped") 

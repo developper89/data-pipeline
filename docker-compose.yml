@@ -84,6 +84,35 @@ services:
       - kafka
       - influxdb
 
+  cache_service:
+    container_name: cache_service
+    build:
+      context: .
+      dockerfile: cache_service/Dockerfile
+    volumes:
+      - ./cache_service:/app/cache_service
+      - ./shared:/app/shared
+    environment:
+      # Kafka Configuration
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_VALIDATED_DATA_TOPIC=iot_validated_data
+      - KAFKA_ERROR_TOPIC=iot_errors
+      - KAFKA_CONSUMER_GROUP_ID=cache_service_group
+      - KAFKA_CONSUMER_POLL_TIMEOUT_S=1.0
+      # Redis Configuration
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-preservarium-redis}
+      - REDIS_METADATA_TTL=86400
+      # Service Configuration
+      - LOG_LEVEL=INFO
+    networks:
+      - preservarium_net
+    depends_on:
+      - kafka
+      - redis
+
   influxdb:
     image: influxdb:2.6
     container_name: influxdb
@@ -98,6 +127,17 @@ services:
       - DOCKER_INFLUXDB_INIT_ORG=preservarium
       - DOCKER_INFLUXDB_INIT_BUCKET=iot_data
       - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=${INFLUXDB_TOKEN:-preservarium-token}
+    networks:
+      - preservarium_net
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-preservarium-redis}"]
     networks:
       - preservarium_net
 
@@ -126,4 +166,5 @@ services:
       - "29092:29092"  # External access port
 
 volumes:
-  influxdb-data: 
+  influxdb-data:
+  redis-data: 

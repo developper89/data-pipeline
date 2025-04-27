@@ -285,6 +285,7 @@ class Validator:
             "datatype_name": datatype.name if hasattr(datatype, 'name') else None,
             "datatype_unit": validation_params.get("unit", None),
             "persist": datatype.persist if hasattr(datatype, 'persist') else True,
+            **standardized_data.metadata
         }
 
         # Create ValidatedOutput for internal tracking (no metadata)

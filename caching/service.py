@@ -1,10 +1,6 @@
 import logging
-import json
 import asyncio
-import time
-from typing import Dict, Any, List, Optional
-from datetime import datetime
-from kafka import KafkaConsumer, KafkaError
+from kafka.errors import KafkaError
 from shared.models.common import ValidatedOutput, generate_request_id
 from shared.mq.kafka_helpers import create_kafka_consumer
 import config

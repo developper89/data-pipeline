@@ -7,6 +7,7 @@ import ssl
 import tempfile
 import os
 import time
+import json
 from shared.models.common import RawMessage
 
 from kafka_producer import KafkaMsgProducer
@@ -108,6 +109,52 @@ class MQTTClientWrapper:
         self.client.disconnect()
         logger.info("Cleaning up certificates...")
         self.cert_manager.cleanup()
+
+    def publish_message(self, topic: str, payload, qos=None, retain=None):
+        """
+        Publish a message to an MQTT topic.
+        
+        Args:
+            topic: The MQTT topic to publish to
+            payload: The message payload (string, dict, or bytes)
+            qos: Quality of Service (0, 1, or 2)
+            retain: Whether to retain the message
+            
+        Returns:
+            True if the message was queued for sending, False otherwise
+        """
+        if not self._connected:
+            logger.error("Cannot publish message: MQTT client not connected")
+            return False
+            
+        # Set default QoS and retain if not specified
+        if qos is None:
+            qos = config.MQTT_DEFAULT_QOS
+        if retain is None:
+            retain = config.MQTT_DEFAULT_RETAIN
+            
+        try:
+            # Convert dict payload to JSON string
+            if isinstance(payload, dict):
+                payload = json.dumps(payload)
+            
+            # Convert string to bytes if needed
+            if isinstance(payload, str):
+                payload = payload.encode('utf-8')
+                
+            logger.debug(f"Publishing to MQTT topic '{topic}' (QoS: {qos}, Retain: {retain})")
+            result = self.client.publish(topic, payload, qos=qos, retain=retain)
+            
+            # Check if the message was queued successfully
+            if result.rc != paho.MQTT_ERR_SUCCESS:
+                logger.error(f"Failed to queue MQTT message: {paho.error_string(result.rc)}")
+                return False
+                
+            return True
+        except Exception as e:
+            logger.exception(f"Error publishing MQTT message: {e}")
+            self.kafka_producer.publish_error("MQTT Publish Error", str(e), {"topic": topic})
+            return False
 
     # --- Callback Implementations ---
 

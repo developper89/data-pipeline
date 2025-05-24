@@ -280,25 +280,25 @@ class Validator:
             label = json.loads(datatype.label)
         
         # Build metadata with validation info
-        metadata = {
-            "datatype_id": str(datatype.id) if hasattr(datatype, 'id') else None,
-            "datatype_name": datatype.name if hasattr(datatype, 'name') else None,
-            "datatype_unit": validation_params.get("unit", None),
-            "persist": datatype.persist if hasattr(datatype, 'persist') else True,
-            **standardized_data.metadata
-        }
-
         # Create ValidatedOutput for internal tracking (no metadata)
         validated_output = ValidatedOutput(
             device_id=device_id,
             values=converted_values,
             label=label,
             index=datatype.datatype_index if hasattr(datatype, 'datatype_index') else "",
-            metadata=metadata,
             request_id=request_id,
             timestamp=standardized_data.timestamp
         )
-        
+        if len(standardized_data.metadata) > 0:
+            metadata = {
+                "datatype_id": str(datatype.id) if hasattr(datatype, 'id') else None,
+                "datatype_name": datatype.name if hasattr(datatype, 'name') else None,
+                "datatype_unit": validation_params.get("unit", None),
+                "persist": datatype.persist if hasattr(datatype, 'persist') else True,
+                **standardized_data.metadata
+            }
+            validated_output.metadata = metadata
+            
         return validated_output
 
     def _apply_parsing_operations(self, values: List[Any], validation_params: Dict) -> Tuple[bool, List[Any], List[str]]:

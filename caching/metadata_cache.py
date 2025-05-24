@@ -28,7 +28,7 @@ class MetadataCache:
         self.redis_repository = redis_repository
         self.config = redis_repository.config
     
-    async def cache_reading(self, device_id: str, reading_data: Dict[str, Any], 
+    async def cache_reading(self, device_id: str, reading_data: ValidatedOutput, 
                            ttl: Optional[int] = None) -> bool:
         """
         Cache a single reading for a device. If the reading has a new request_id,
@@ -36,7 +36,7 @@ class MetadataCache:
         
         Args:
             device_id: The device ID
-            reading_data: Dictionary containing reading data and metadata
+            reading_data: ValidatedOutput object containing reading data and metadata
             ttl: Time-to-live in seconds (optional)
         
         Returns:
@@ -44,8 +44,11 @@ class MetadataCache:
         """
         try:
             # Extract request_id from reading data
-            request_id = reading_data.get('request_id')
+            request_id = reading_data.request_id
             
+            # Store the reading data as JSON using the model's built-in serialization
+            reading_metadata = reading_data.metadata
+            logger.info(f"Caching reading for device {device_id}: {reading_metadata}")
             if not request_id:
                 logger.warning(f"Reading data for device {device_id} has no request_id")
                 # Still proceed with caching, but without request tracking
@@ -53,9 +56,9 @@ class MetadataCache:
                 # Check if this is a new request for this device
                 current_request_key = f"device:{device_id}:current_request_id"
                 current_request_id = await self.redis_repository.redis_client.get(current_request_key)
-                
+                logger.info(f"Current request_id for device {device_id}: {current_request_id}")
                 # If request_id is different, clear previous readings
-                if current_request_id is None or current_request_id.decode('utf-8') != request_id:
+                if current_request_id is None or current_request_id != request_id:
                     logger.debug(f"New request_id {request_id} for device {device_id}, clearing previous readings")
                     
                     # Clear previous readings
@@ -71,8 +74,7 @@ class MetadataCache:
             
             # Add reading to the device's readings list
             readings_key = f"device:{device_id}:readings"
-            reading_json = json.dumps(reading_data)
-            await self.redis_repository.redis_client.rpush(readings_key, reading_json)
+            await self.redis_repository.redis_client.rpush(readings_key, json.dumps(reading_metadata))
             
             # Set expiration on readings list
             await self.redis_repository.redis_client.expire(
@@ -137,46 +139,6 @@ class MetadataCache:
         except Exception as e:
             logger.error(f"Error retrieving all device IDs: {str(e)}")
             return []
-    
-    async def cache_validated_output(self, validated_output: ValidatedOutput) -> bool:
-        """
-        Cache data from a ValidatedOutput object.
-        This is the primary method used by the cache service to process
-        messages from Kafka that were published by the normalizer.
-        
-        Args:
-            validated_output: ValidatedOutput pydantic model from the normalizer
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        try:
-            # Extract required data from ValidatedOutput
-            device_id = validated_output.device_id
-            
-            # Skip if missing required fields
-            if not device_id:
-                logger.warning("No device_id in validated output")
-                return False
-            
-            # Convert ValidatedOutput to a dictionary for storage
-            # First, convert to dict using pydantic's built-in method
-            reading_data = validated_output.model_dump()
-            
-            # Cache the reading
-            success = await self.cache_reading(device_id, reading_data)
-            
-            if success:
-                logger.info(f"Successfully cached reading for device {device_id}" +
-                           (f" with request_id {validated_output.request_id}" if hasattr(validated_output, 'request_id') else ""))
-            else:
-                logger.error(f"Failed to cache reading for device {device_id}")
-                
-            return success
-            
-        except Exception as e:
-            logger.error(f"Error caching validated output for device {validated_output.device_id if hasattr(validated_output, 'device_id') else 'unknown'}: {str(e)}")
-            return False
     
     async def close(self) -> None:
         """

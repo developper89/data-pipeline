@@ -7,7 +7,9 @@ import aiocoap.resource as resource
 
 from .resources import DataRootResource
 from .kafka_producer import KafkaMsgProducer # Import Kafka producer wrapper
+from .command_consumer import CommandConsumer
 from . import config
+from .command_registry import CommandRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -19,21 +21,29 @@ class CoapGatewayServer:
         self.protocol = None
         self._run_task = None
         self._stop_event = asyncio.Event()
-
+        self.command_consumer = None
+        
     async def start(self):
         """Creates the CoAP context and starts the server."""
         logger.info(f"Starting CoAP Gateway on {self.host}:{self.port}")
         try:
-            # Create the root resource that will handle dynamic child creation
-            # Note: We instantiate DataRootResource directly now
-            data_root = DataRootResource(self.kafka_producer)
-
-            # The aiocoap server context needs the top-level site/resource
+            # Initialize the command registry
+            command_registry = CommandRegistry()
+            
+            # Initialize the command consumer with the registry
+            self.command_consumer = CommandConsumer(command_registry)
+            await self.command_consumer.start()
+            logger.info("Command consumer started with command registry")
+            
+            # Create the data resource that will handle both device data and commands
+            data_root = DataRootResource(self.kafka_producer, self.command_consumer)
+            
+            # The aiocoap server context needs the site root
             self.protocol = await aiocoap.Context.create_server_context(
-                data_root, # Pass the DataRootResource as the site root
+                data_root,  # Pass DataRootResource as the site root
                 bind=(self.host, self.port)
             )
-            logger.info(f"Registered CoAP data endpoint root at path: /{'/'.join(config.COAP_BASE_DATA_PATH)}/{{device_id}}") # Path defined in DataRootResource logic now
+            logger.info(f"Registered CoAP endpoint at path: /{'/'.join(config.COAP_BASE_DATA_PATH)}/{{device_id}}")
             logger.info("CoAP server context created successfully.")
 
             # Keep the server running until stop event is set
@@ -61,6 +71,13 @@ class CoapGatewayServer:
 
         logger.info("Stopping CoAP Gateway Server...")
         self._stop_event.set() # Signal the run loop to stop
+
+        # Stop the command consumer
+        if self.command_consumer:
+            logger.info("Stopping command consumer...")
+            await self.command_consumer.stop()
+            self.command_consumer = None
+            logger.info("Command consumer stopped")
 
         # Allow the run task to exit cleanly if possible
         if self._run_task and not self._run_task.done():

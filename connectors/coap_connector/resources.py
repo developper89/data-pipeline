@@ -1,6 +1,7 @@
 # coap_gateway/resources.py
 import logging
 import base64
+import json
 from datetime import datetime, timezone
 import uuid # To generate request ID if needed
 
@@ -10,16 +11,18 @@ from kafka.errors import KafkaError
 
 from shared.models.common import RawMessage # Import shared model
 from .kafka_producer import KafkaMsgProducer # Import the Kafka producer wrapper
+from .command_consumer import CommandConsumer
 
 logger = logging.getLogger(__name__)
 
 class DeviceDataHandlerResource(resource.Resource):
     """Handles POST/PUT requests for a specific device ID."""
 
-    def __init__(self, device_id: str, kafka_producer: KafkaMsgProducer): # Updated type hint
+    def __init__(self, device_id: str, kafka_producer: KafkaMsgProducer, command_consumer: CommandConsumer): 
         super().__init__()
         self.device_id = device_id
-        self.kafka_producer = kafka_producer # Store Kafka producer wrapper
+        self.kafka_producer = kafka_producer
+        self.command_consumer = command_consumer
         logger.debug(f"Initialized handler resource for device: {self.device_id}")
 
     async def render_post(self, request: aiocoap.Message) -> aiocoap.Message:
@@ -31,7 +34,10 @@ class DeviceDataHandlerResource(resource.Resource):
         return await self._process_request(request, method="PUT")
 
     async def _process_request(self, request: aiocoap.Message, method: str) -> aiocoap.Message:
-        """Common logic for processing POST/PUT."""
+        """
+        Common logic for processing POST/PUT.
+        Also includes pending commands in the response if any exist.
+        """
         request_id = str(uuid.uuid4()) # Generate a unique ID for this request
         payload_bytes = request.payload
         source_address = request.remote.hostinfo
@@ -48,13 +54,12 @@ class DeviceDataHandlerResource(resource.Resource):
             raw_message = RawMessage(
                 request_id=request_id, # Include the generated request ID
                 device_id=self.device_id,
-                payload_b64=base64.b64encode(payload_bytes).decode('ascii'),
+                payload_hex=payload_bytes.hex(),  # Convert binary to hex string
                 protocol="coap",
                 metadata={
                     "source_address": source_address,
                     "method": method,
                     "uri_path": request_uri_path,
-                    # Could add CoAP options here if needed
                 }
             )
 
@@ -77,10 +82,29 @@ class DeviceDataHandlerResource(resource.Resource):
 
                  return aiocoap.Message(code=aiocoap.Code.INTERNAL_SERVER_ERROR, payload=b"Failed to forward data internally")
 
-            # 3. Send success response to CoAP client
-            success_code = aiocoap.Code.CHANGED if method == "PUT" else aiocoap.Code.CREATED
-            logger.debug(f"[{request_id}] Successfully processed and published data for {self.device_id}. Responding {success_code}.")
-            return aiocoap.Message(code=success_code)
+            # 3. Check for pending commands for this device
+            # Try to get a formatted command using the bidirectional parser
+            formatted_command = await self.command_consumer.get_formatted_command(self.device_id)
+            
+            if formatted_command:
+                # Get the command details for logging
+                pending_commands = self.command_consumer.get_pending_commands(self.device_id)
+                command_id = pending_commands[0].get("request_id", "unknown") if pending_commands else "unknown"
+                
+                logger.info(f"[{request_id}] Sending formatted command {command_id} to device {self.device_id}")
+                
+                # Acknowledge the command was sent (removes from pending)
+                if pending_commands:
+                    self.command_consumer.acknowledge_command(self.device_id, command_id)
+                
+                # Send the formatted binary command in response
+                success_code = aiocoap.Code.CHANGED if method == "PUT" else aiocoap.Code.CREATED
+                return aiocoap.Message(code=success_code, payload=formatted_command)
+            else:
+                # No commands pending or no parser available - just send success code
+                success_code = aiocoap.Code.CHANGED if method == "PUT" else aiocoap.Code.CREATED
+                logger.debug(f"[{request_id}] Successfully processed data for {self.device_id}. No commands sent.")
+                return aiocoap.Message(code=success_code)
 
         except Exception as e:
             # Catch any other unexpected errors during RawMessage creation etc.
@@ -104,25 +128,18 @@ class DataRootResource(resource.Site): # Inherit from Site for automatic child h
     Listens on the base path (e.g., /data) and delegates requests
     like /data/device123 to a handler for 'device123'.
     """
-    def __init__(self, kafka_producer: KafkaMsgProducer): # Updated type hint
+    def __init__(self, kafka_producer: KafkaMsgProducer, command_consumer: CommandConsumer):
         super().__init__()
-        self.kafka_producer = kafka_producer # Store Kafka producer wrapper
+        self.kafka_producer = kafka_producer
+        self.command_consumer = command_consumer
         logger.debug(f"Initialized DataRootResource.")
-
-    # Override Site's default behavior if needed, but often just adding resources is enough
-    # In aiocoap, adding a resource later dynamically creates children.
-    # We need get_child if we want truly dynamic paths not known at startup.
-    # Let's stick to the previous get_child approach for dynamic device IDs.
 
     async def render(self, request):
          # Requests directly to the root (e.g., /data) are not allowed
          logger.warning(f"Request received directly to data root path {request.opt.uri_path}. Method Not Allowed.")
          return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED)
 
-    # Use needs_blockwise_assembly=False if payloads are expected to be small,
-    # otherwise aiocoap handles blockwise transfers automatically.
-    # We still need get_child to dynamically create handlers per device ID.
-    async def get_child(self, path: tuple, request: aiocoap.interfaces.Request) -> Optional[aiocoap.interfaces.Resource]:
+    async def get_child(self, path: tuple, request: aiocoap.interfaces.Request):
          """
          Dynamically create a handler for the device ID path segment.
          'path' contains the remaining path segments.
@@ -133,7 +150,7 @@ class DataRootResource(resource.Site): # Inherit from Site for automatic child h
                  device_id = device_id_bytes.decode('utf-8')
                  logger.debug(f"Request for device sub-path '{device_id}'. Creating handler.")
                  # Return a *new instance* of the handler for this specific device ID
-                 return DeviceDataHandlerResource(device_id, self.kafka_producer)
+                 return DeviceDataHandlerResource(device_id, self.kafka_producer, self.command_consumer)
              except UnicodeDecodeError:
                   logger.warning(f"Invalid UTF-8 in path element: {device_id_bytes!r}. Rejecting request.")
                   # Returning None results in 4.04 Not Found

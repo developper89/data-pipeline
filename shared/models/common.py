@@ -52,7 +52,7 @@ class StandardizedOutput(CustomBaseModel):
     values: List[Any]
     label: Optional[List[str]] = None
     index: str = ""
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Optional[Dict[str, Any]] = None
 
 class ValidatedOutput(CustomBaseModel):
     """
@@ -63,4 +63,4 @@ class ValidatedOutput(CustomBaseModel):
     values: List[Any]
     label: Optional[List[str]] = None
     index: str = ""
-    metadata: Dict[str, Any] = Field(default_factory=dict)
+    metadata: Optional[Dict[str, Any]] = None

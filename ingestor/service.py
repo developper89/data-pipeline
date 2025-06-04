@@ -154,6 +154,7 @@ class IngestorService:
         try:
             # Message value is already deserialized by KafkaConsumer
             data = message.value
+            
             request_id = data.get("request_id", generate_request_id())
             
             logger.debug(f"[{request_id}] Processing message for device: {data.get('device_id', 'unknown')}")
@@ -169,7 +170,7 @@ class IngestorService:
             
             # Check the persist field in metadata - skip if persist is False
             metadata = validated_output.metadata
-            should_persist = metadata.get("persist", True)  # Default to True if not specified
+            should_persist = metadata.get("persist", False)  # Default to True if not specified
             
             if not should_persist:
                 logger.info(f"[{request_id}] Skipping data for device {validated_output.device_id} as persist=False, data: {validated_output.label}")
@@ -191,7 +192,7 @@ class IngestorService:
                 return False  # Indicate failure - message will be retried
                 
         except Exception as e:
-            logger.error(f"Error processing message: {str(e)}")
+            logger.error(f"Error processing message: {str(e)}", exc_info=True)
             return False  # Indicate failure - message will be retried
             
     def _safe_close_consumer(self):

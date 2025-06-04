@@ -1,153 +1,460 @@
-# Dynamic Connector Container Manager
+# Preservarium Pusher API
 
-This project implements a dynamic container management system for various protocol connectors to Kafka. It allows you to define connector configurations in YAML and automatically manages Docker containers for each connector.
-
-## Project Structure
-
-```
-.
-├── docker-compose.yml
-├── manager/
-│   ├── Dockerfile
-│   ├── manager.py
-│   ├── connectors_config.yaml
-│   └── requirements.txt
-└── connector/
-    └── mqtt/              # MQTT protocol connector
-        ├── Dockerfile
-        ├── entrypoint.sh
-        ├── requirements.txt
-        └── scripts/
-            └── mqtt_to_kafka.py
-```
+A FastAPI-based web service for pushing commands to IoT devices through Kafka. This service provides a RESTful API for sending device commands that are published to Kafka topics for consumption by device connectors.
 
 ## Features
 
-- Protocol-based connector organization
-- Dynamic container management based on YAML configuration
-- Automatic container creation and removal
-- Protocol-specific message forwarding to Kafka
-- Configurable connector scripts
-- Centralized logging
-- Automatic reconnection handling
+- RESTful API for device command publishing
+- Protocol-agnostic design supporting MQTT and CoAP
+- Kafka integration for reliable message delivery
+- Optional API key authentication
+- Comprehensive health checks and metrics
+- Batch command processing
+- Docker support with multi-stage builds
+- Structured logging with JSON/text formats
 
-## Prerequisites
+## Architecture
 
-- Docker
-- Docker Compose
+The service follows a clean architecture pattern:
+
+```
+preservarium-pusher-api/
+├── pusher_api/
+│   ├── api/                    # API layer (FastAPI routes)
+│   │   ├── dependencies.py     # Dependency injection
+│   │   └── v1/
+│   │       ├── commands.py     # Command endpoints
+│   │       └── health.py       # Health endpoints
+│   ├── core/                   # Core configuration and models
+│   │   ├── config.py          # Settings and configuration
+│   │   ├── exceptions.py      # Custom exceptions
+│   │   └── models.py          # API-specific Pydantic models
+│   ├── services/              # Business logic layer
+│   │   ├── pusher_service.py  # Main service logic
+│   │   └── kafka_service.py   # Kafka integration
+│   └── main.py                # FastAPI application factory
+└── shared/                    # Shared models and utilities
+    └── models/
+        └── common.py          # CommandMessage and other shared models
+```
+
+## Command Model
+
+Commands use the shared `CommandMessage` model from `shared.models.common`:
+
+```python
+class CommandMessage(CustomBaseModel):
+    device_id: str              # Target device identifier
+    command_type: str           # Command type (e.g., 'reboot', 'config_update')
+    payload: Dict[str, Any]     # Command payload data
+    protocol: str               # Protocol ('mqtt' or 'coap')
+    parser_script_ref: Optional[str]  # Parser script reference
+    metadata: Optional[Dict]    # Protocol-specific metadata
+    priority: Optional[int]     # Command priority
+    expires_at: Optional[datetime]  # Expiration time
+
+    # Inherited from CustomBaseModel:
+    request_id: str             # Auto-generated UUID
+    timestamp: datetime         # Auto-generated timestamp
+```
+
+## Installation
+
+### Using Docker (Recommended)
+
+1. **Clone the repository:**
+
+   ```bash
+   git clone <repository-url>
+   cd data-pipeline/preservarium-pusher-api
+   ```
+
+2. **Build and run with Docker Compose:**
+   ```bash
+   docker-compose up --build
+   ```
+
+This will start:
+
+- Preservarium Pusher API on port 8000
+- Kafka on port 9092
+- Zookeeper on port 2181
+- Kafka UI on port 8080
+
+### Local Development
+
+1. **Install dependencies:**
+
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. **Set environment variables:**
+
+   ```bash
+   export KAFKA_BOOTSTRAP_SERVERS="localhost:9092"
+   export KAFKA_COMMAND_TOPIC="device_commands"
+   # Optional: Enable API key authentication
+   export API_KEYS="your-secret-api-key-1,your-secret-api-key-2"
+   ```
+
+3. **Run the service:**
+   ```bash
+   uvicorn pusher_api.main:create_app --factory --host 0.0.0.0 --port 8000 --reload
+   ```
 
 ## Configuration
 
-### Connector Configuration
+The service is configured through environment variables:
 
-Edit `manager/connectors_config.yaml` to define your connectors:
+| Variable                  | Default                   | Description                         |
+| ------------------------- | ------------------------- | ----------------------------------- |
+| `KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092`          | Kafka bootstrap servers             |
+| `KAFKA_COMMAND_TOPIC`     | `device_commands`         | Kafka topic for commands            |
+| `KAFKA_TIMEOUT_MS`        | `5000`                    | Kafka operation timeout             |
+| `API_HOST`                | `0.0.0.0`                 | API host binding                    |
+| `API_PORT`                | `8000`                    | API port                            |
+| `API_TITLE`               | `Preservarium Pusher API` | API title                           |
+| `API_VERSION`             | `1.0.0`                   | API version                         |
+| `CORS_ORIGINS`            | `["*"]`                   | CORS allowed origins                |
+| `LOG_LEVEL`               | `INFO`                    | Logging level                       |
+| `LOG_FORMAT`              | `text`                    | Log format (`text` or `json`)       |
+| `API_KEYS`                | `None`                    | Comma-separated API keys (optional) |
+| `ENVIRONMENT`             | `development`             | Environment name                    |
+| `SERVICE_NAME`            | `preservarium-pusher-api` | Service name                        |
 
-```yaml
-connectors:
-  - connector_id: "mqtt_connector1"
-    image: "mqtt-connector:latest"
-    env:
-      BROKER_HOST: "broker1.example.com"
-      BROKER_PORT: "1883"
-      KAFKA_BOOTSTRAP: "kafka:9092"
-      KAFKA_TOPIC: "topic1"
-      MQTT_TOPICS: "sensors/#,devices/#" # Comma-separated list of topics
-      CONNECTOR_SCRIPT_PATH: "/app/connector_scripts/mqtt_to_kafka.py"
+## API Documentation
+
+Once the service is running, you can access:
+
+- **Interactive API docs (Swagger UI):** http://localhost:8000/docs
+- **Alternative API docs (ReDoc):** http://localhost:8000/redoc
+- **OpenAPI schema:** http://localhost:8000/openapi.json
+
+## Usage Examples
+
+### Basic Health Check
+
+```bash
+curl http://localhost:8000/health
 ```
 
-### Adding New Protocol Connectors
+### Send a Single Command
 
-1. Create a new directory under `connector/` for your protocol (e.g., `connector/modbus/`)
-2. Add the protocol-specific files:
-   - Dockerfile
-   - requirements.txt
-   - entrypoint.sh
-   - scripts/
-3. Update `connectors_config.yaml` with the new connector configuration
+```bash
+curl -X POST "http://localhost:8000/api/v1/commands" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "device_id": "efento_device_001",
+    "command_type": "config_update",
+    "payload": {"measurement_interval": 600},
+    "protocol": "coap",
+    "parser_script_ref": "efento_bidirectional_parser.py",
+    "metadata": {
+      "confirmable": true,
+      "options": {"observe": 0}
+    }
+  }'
+```
 
-## Usage
+### Send Batch Commands
 
-1. Build the images:
+```bash
+curl -X POST "http://localhost:8000/api/v1/commands/batch" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "commands": [
+      {
+        "device_id": "device_001",
+        "command_type": "reboot",
+        "payload": {},
+        "protocol": "coap",
+        "metadata": {"confirmable": true}
+      },
+      {
+        "device_id": "device_002",
+        "command_type": "update",
+        "payload": {"version": "1.2.3"},
+        "protocol": "mqtt",
+        "metadata": {
+          "topic": "devices/device_002/commands",
+          "qos": 1,
+          "retain": false
+        }
+      }
+    ]
+  }'
+```
 
-   ```bash
-   docker-compose build
-   ```
+### With API Key Authentication
 
-2. Start the system:
+```bash
+curl -X POST "http://localhost:8000/api/v1/commands" \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-secret-api-key" \
+  -d '{
+    "device_id": "secure_device_001",
+    "command_type": "security_update",
+    "payload": {"enable_encryption": true},
+    "protocol": "mqtt"
+  }'
+```
 
-   ```bash
-   docker-compose up -d
-   ```
+### Get Service Status
 
-3. Monitor the logs:
-   ```bash
-   docker-compose logs -f
-   ```
+```bash
+curl http://localhost:8000/api/v1/status
+```
 
-## Adding New Connectors
+## Protocol-Specific Examples
 
-1. Choose or create the appropriate protocol directory in `connector/`
-2. Add your connector script to the protocol's `scripts/` directory
-3. Add the connector configuration to `manager/connectors_config.yaml`
-4. The manager will automatically detect the new configuration and create the container
+### MQTT Commands
 
-## Removing Connectors
+```json
+{
+  "device_id": "mqtt_device_001",
+  "command_type": "led_control",
+  "payload": { "state": "on", "brightness": 80 },
+  "protocol": "mqtt",
+  "metadata": {
+    "topic": "devices/mqtt_device_001/commands/led",
+    "qos": 1,
+    "retain": false
+  }
+}
+```
 
-1. Remove the connector configuration from `manager/connectors_config.yaml`
-2. The manager will automatically detect the change and remove the container
+### CoAP Commands
+
+```json
+{
+  "device_id": "coap_device_001",
+  "command_type": "sensor_config",
+  "payload": { "sampling_rate": 10 },
+  "protocol": "coap",
+  "metadata": {
+    "confirmable": true,
+    "options": { "uri_path": "/config" }
+  }
+}
+```
+
+## Client Libraries
+
+### Python Client
+
+```python
+import requests
+import json
+
+class PusherAPIClient:
+    def __init__(self, base_url: str, api_key: str = None):
+        self.base_url = base_url.rstrip('/')
+        self.api_key = api_key
+
+    def _headers(self):
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["X-API-Key"] = self.api_key
+        return headers
+
+    def push_command(self, device_id: str, command_type: str,
+                    payload: dict, protocol: str, **kwargs):
+        command = {
+            "device_id": device_id,
+            "command_type": command_type,
+            "payload": payload,
+            "protocol": protocol,
+            **kwargs
+        }
+
+        response = requests.post(
+            f"{self.base_url}/api/v1/commands",
+            headers=self._headers(),
+            data=json.dumps(command)
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def health_check(self):
+        response = requests.get(f"{self.base_url}/health")
+        response.raise_for_status()
+        return response.json()
+
+# Usage
+client = PusherAPIClient("http://localhost:8000", api_key="your-key")
+
+result = client.push_command(
+    device_id="test_device",
+    command_type="reboot",
+    payload={},
+    protocol="mqtt",
+    metadata={"topic": "devices/test_device/commands", "qos": 1}
+)
+print(result)
+```
+
+### JavaScript Client
+
+```javascript
+class PusherAPIClient {
+  constructor(baseURL, apiKey = null) {
+    this.baseURL = baseURL.replace(/\/$/, "");
+    this.apiKey = apiKey;
+  }
+
+  _headers() {
+    const headers = { "Content-Type": "application/json" };
+    if (this.apiKey) {
+      headers["X-API-Key"] = this.apiKey;
+    }
+    return headers;
+  }
+
+  async pushCommand(deviceId, commandType, payload, protocol, options = {}) {
+    const command = {
+      device_id: deviceId,
+      command_type: commandType,
+      payload: payload,
+      protocol: protocol,
+      ...options,
+    };
+
+    const response = await fetch(`${this.baseURL}/api/v1/commands`, {
+      method: "POST",
+      headers: this._headers(),
+      body: JSON.stringify(command),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    return await response.json();
+  }
+
+  async healthCheck() {
+    const response = await fetch(`${this.baseURL}/health`);
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+    return await response.json();
+  }
+}
+
+// Usage
+const client = new PusherAPIClient("http://localhost:8000", "your-key");
+
+client
+  .pushCommand(
+    "test_device",
+    "led_control",
+    { state: "on", color: "blue" },
+    "mqtt",
+    { metadata: { topic: "devices/test_device/led", qos: 1 } }
+  )
+  .then((result) => console.log(result));
+```
 
 ## Development
 
-To modify a protocol connector:
+### Running Tests
 
-1. Update the connector code in `connector/<protocol>/scripts/`
-2. Rebuild the protocol connector image:
-   ```bash
-   docker-compose build <protocol>-connector
-   ```
+```bash
+# Install test dependencies
+pip install -r requirements-dev.txt
 
-To modify the manager:
+# Run tests
+pytest tests/ -v
 
-1. Update the manager code in `manager/`
-2. Rebuild the manager image:
-   ```bash
-   docker-compose build manager
-   ```
+# Run with coverage
+pytest tests/ --cov=pusher_api --cov-report=html
+```
 
-## Supported Protocols
+### Code Quality
 
-Currently supported protocols:
+```bash
+# Format code
+black pusher_api/
+isort pusher_api/
 
-- MQTT: Connects to MQTT brokers and forwards messages to Kafka
+# Lint code
+flake8 pusher_api/
+mypy pusher_api/
+```
 
-## Adding New Protocols
+## Monitoring and Debugging
 
-To add support for a new protocol:
+### Health Endpoints
 
-1. Create a new directory under `connector/` for your protocol
-2. Implement the protocol-specific connector logic
-3. Add protocol-specific configuration options
-4. Update documentation
+- **Basic Health:** `GET /health` - Simple health check
+- **Detailed Health:** `GET /api/v1/health` - Detailed service status
+- **Service Status:** `GET /api/v1/status` - Comprehensive metrics
+
+### Logging
+
+The service provides structured logging with configurable formats:
+
+```bash
+# JSON logging (for production)
+export LOG_FORMAT=json
+
+# Text logging (for development)
+export LOG_FORMAT=text
+```
+
+### Metrics
+
+Service metrics are available at `/api/v1/status`:
+
+```json
+{
+  "service": "preservarium-pusher-api",
+  "version": "1.0.0",
+  "environment": "production",
+  "kafka_connected": true,
+  "uptime": "2 hours, 30 minutes",
+  "metrics": {
+    "commands_sent_total": 1250,
+    "commands_failed_total": 5,
+    "uptime_seconds": 9000.0,
+    "kafka_connected": true,
+    "last_error": null,
+    "last_error_time": null
+  }
+}
+```
 
 ## Troubleshooting
 
-- Check container logs:
+### Common Issues
 
-  ```bash
-  docker-compose logs -f [service-name]
-  ```
+1. **Kafka Connection Failed**
 
-- Check connector status:
+   - Check `KAFKA_BOOTSTRAP_SERVERS` configuration
+   - Ensure Kafka is running and accessible
+   - Verify network connectivity
 
-  ```bash
-  docker ps -a | grep connector_container
-  ```
+2. **Command Validation Errors**
 
-- Restart the manager:
-  ```bash
-  docker-compose restart manager
-  ```
+   - Check CommandMessage schema requirements
+   - Ensure all required fields are provided
+   - Validate protocol-specific metadata format
+
+3. **Authentication Issues**
+   - Verify API key configuration
+   - Check `X-API-Key` header format
+   - Ensure API keys are properly comma-separated in environment
+
+### Debug Mode
+
+Enable debug logging for troubleshooting:
+
+```bash
+export LOG_LEVEL=DEBUG
+uvicorn pusher_api.main:create_app --factory --reload
+```
 
 ## License
 
-MIT
+This project is part of the Preservarium IoT data pipeline system.

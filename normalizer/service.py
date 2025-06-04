@@ -39,7 +39,7 @@ from preservarium_sdk.infrastructure.sql_repository.sql_sensor_repository import
 
 # Import local components
 from kafka_producer import NormalizerKafkaProducer  # Import the new wrapper
-from script_client import ScriptClient, ScriptNotFoundError
+from shared.utils.script_client import ScriptClient, ScriptNotFoundError
 from normalizer.validator import Validator  # Import the validator
 
 import config

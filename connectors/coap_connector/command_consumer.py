@@ -10,7 +10,6 @@ from kafka.errors import KafkaError
 
 from shared.mq.kafka_helpers import create_kafka_consumer
 from . import config
-from .command_registry import CommandRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -19,29 +18,22 @@ class CommandConsumer:
     Consumes device command messages from Kafka and processes them for CoAP devices.
     In CoAP's case, commands are stored for later fetching when devices poll the server,
     as CoAP is often used with sleeping devices that can't receive push messages directly.
+    
+    Commands are expected to be pre-formatted by the pusher-api before being published to Kafka.
     """
     
-    def __init__(self, command_registry: CommandRegistry = None):
+    def __init__(self):
         """
         Initialize the command consumer.
-        
-        Args:
-            command_registry: Optional CommandRegistry instance for formatting commands
         """
         self.consumer = None
         self.running = False
         self._stop_event = asyncio.Event()
         self._task = None
         
-        # Command registry for formatting device-specific commands
-        self.command_registry = command_registry or CommandRegistry()
-        
         # In-memory store for pending commands, indexed by device_id
         # In a production system, this would be a persistent store
         self.pending_commands: Dict[str, List[Dict[str, Any]]] = {}
-        
-        # In-memory device configuration cache
-        self.device_configs: Dict[str, Dict[str, Any]] = {}
         
     async def start(self):
         """Start the command consumer."""
@@ -221,49 +213,16 @@ class CommandConsumer:
                 
         return False
     
-    async def _get_device_config(self, device_id: str) -> Dict[str, Any]:
-        """
-        Get device configuration from database or cache.
-        For now, this is a simple in-memory cache. In a production system,
-        this would query a database or configuration service.
-        
-        Args:
-            device_id: The device ID to get configuration for
-            
-        Returns:
-            Device configuration dictionary
-        """
-        # Check cache first
-        if device_id in self.device_configs:
-            return self.device_configs[device_id]
-            
-        # In a real implementation, query database here
-        # For now, return a minimal config without requiring parser_script_ref
-        # since the command will carry this information in the 'path' field
-        
-        # Example implementation:
-        # TODO: Replace with actual database or API call
-        config = {
-            'device_id': device_id,
-            'labels': {'location': 'unknown'},
-            'metadata': {
-                'uri_path': '/m'  # Default path for measurement data
-            }
-        }
-        
-        # Cache the config
-        self.device_configs[device_id] = config
-        return config
-    
     async def get_formatted_command(self, device_id: str) -> Optional[bytes]:
         """
-        Get a formatted command for a device using its parser.
+        Get a pre-formatted command for a device.
+        Commands must be pre-formatted by the pusher-api.
         
         Args:
             device_id: The device ID to get a command for
             
         Returns:
-            Formatted command bytes or None if no commands or formatting fails
+            Pre-formatted command bytes or None if no commands available
         """
         if not self.pending_commands.get(device_id):
             return None
@@ -273,21 +232,23 @@ class CommandConsumer:
         command_id = command.get('request_id', 'unknown')
         
         try:
-            # Get device configuration
-            device_config = await self._get_device_config(device_id)
-            
-            # Format command using registry
-            formatted_command = await self.command_registry.format_command(
-                device_id, command, device_config
-            )
-            
-            if formatted_command:
-                logger.info(f"Successfully formatted command {command_id} for device {device_id}")
-                return formatted_command
+            # Check if command is pre-formatted (from pusher-api)
+            payload = command.get('payload', {})
+            if isinstance(payload, dict) and 'formatted_command' in payload:
+                # Command was pre-formatted by pusher-api
+                formatted_hex = payload['formatted_command']
+                try:
+                    formatted_command = bytes.fromhex(formatted_hex)
+                    logger.info(f"[{command_id}] Using pre-formatted command for device {device_id}")
+                    return formatted_command
+                except ValueError as e:
+                    logger.error(f"[{command_id}] Invalid hex string in pre-formatted command: {e}")
+                    return None
             else:
-                logger.warning(f"Failed to format command {command_id} for device {device_id}")
+                # Command is not pre-formatted - this should not happen with the new architecture
+                logger.error(f"[{command_id}] Command not pre-formatted for device {device_id}. All commands must be formatted by pusher-api.")
                 return None
                 
         except Exception as e:
-            logger.exception(f"Error getting formatted command for device {device_id}: {e}")
+            logger.exception(f"[{command_id}] Error getting pre-formatted command for device {device_id}: {e}")
             return None 

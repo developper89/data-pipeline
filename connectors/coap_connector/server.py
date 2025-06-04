@@ -9,7 +9,6 @@ from .resources import DataRootResource
 from .kafka_producer import KafkaMsgProducer # Import Kafka producer wrapper
 from .command_consumer import CommandConsumer
 from . import config
-from .command_registry import CommandRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +26,10 @@ class CoapGatewayServer:
         """Creates the CoAP context and starts the server."""
         logger.info(f"Starting CoAP Gateway on {self.host}:{self.port}")
         try:
-            # Initialize the command registry
-            command_registry = CommandRegistry()
-            
-            # Initialize the command consumer with the registry
-            self.command_consumer = CommandConsumer(command_registry)
+            # Initialize the command consumer
+            self.command_consumer = CommandConsumer()
             await self.command_consumer.start()
-            logger.info("Command consumer started with command registry")
+            logger.info("Command consumer started")
             
             # Create the data resource that will handle both device data and commands
             data_root = DataRootResource(self.kafka_producer, self.command_consumer)

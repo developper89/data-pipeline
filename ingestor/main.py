@@ -11,7 +11,7 @@ from service import IngestorService
 # Configure logging
 logging.basicConfig(
     level=config.LOG_LEVEL,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
 )
 
 # Suppress overly verbose library logs

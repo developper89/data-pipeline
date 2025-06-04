@@ -13,7 +13,7 @@ logger = logging.getLogger("cache_service.metadata_cache")
 
 class MetadataCache:
     """
-    Service for caching device metadata.
+    Service for caching complete device reading data (values, label, index, metadata).
     Provides methods for storing and retrieving device readings.
     Utilizes RedisBaseRepository from SDK for basic Redis operations.
     """
@@ -46,9 +46,19 @@ class MetadataCache:
             # Extract request_id from reading data
             request_id = reading_data.request_id
             
-            # Store the reading data as JSON using the model's built-in serialization
-            reading_metadata = reading_data.metadata
-            logger.info(f"Caching reading for device {device_id}: {reading_metadata}")
+            # Create complete reading data dictionary including values, label, index, and metadata
+            complete_reading_data = {
+                "device_id": reading_data.device_id,
+                "values": reading_data.values,
+                "label": reading_data.label,
+                "index": reading_data.index,
+                "metadata": reading_data.metadata,
+                "timestamp": reading_data.timestamp.isoformat() if reading_data.timestamp else None,
+                "request_id": reading_data.request_id
+            }
+            
+            logger.info(f"Caching complete reading for device {device_id}: values={reading_data.values}, label={reading_data.label}, index={reading_data.index}, metadata={reading_data.metadata}")
+            
             if not request_id:
                 logger.warning(f"Reading data for device {device_id} has no request_id")
                 # Still proceed with caching, but without request tracking
@@ -72,9 +82,9 @@ class MetadataCache:
                         ex=ttl or self.config.metadata_ttl
                     )
             
-            # Add reading to the device's readings list
+            # Add complete reading to the device's readings list
             readings_key = f"device:{device_id}:readings"
-            await self.redis_repository.redis_client.rpush(readings_key, json.dumps(reading_metadata))
+            await self.redis_repository.redis_client.rpush(readings_key, json.dumps(complete_reading_data))
             
             # Set expiration on readings list
             await self.redis_repository.redis_client.expire(
@@ -85,7 +95,7 @@ class MetadataCache:
             # Add device_id to the set of all devices
             await self.redis_repository.redis_client.sadd(self.config.devices_key, device_id)
             
-            logger.debug(f"Cached reading for device {device_id}" + 
+            logger.debug(f"Cached complete reading for device {device_id}" + 
                         (f" with request_id {request_id}" if request_id else ""))
             return True
                 
@@ -95,13 +105,13 @@ class MetadataCache:
     
     async def get_device_readings(self, device_id: str) -> List[Dict[str, Any]]:
         """
-        Get all readings for a device from its most recent request.
+        Get all complete readings (values, label, index, metadata) for a device from its most recent request.
         
         Args:
             device_id: The device ID
         
         Returns:
-            List of reading data dictionaries
+            List of complete reading data dictionaries containing values, label, index, metadata, etc.
         """
         try:
             readings_key = f"device:{device_id}:readings"
@@ -121,6 +131,7 @@ class MetadataCache:
                 except json.JSONDecodeError:
                     logger.error(f"Error parsing reading JSON: {reading_json}")
             
+            logger.debug(f"Retrieved {len(readings)} complete readings for device {device_id}")
             return readings
             
         except Exception as e:

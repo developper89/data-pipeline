@@ -17,5 +17,5 @@ ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # Default command
 # CMD ["python", "-m", "ingestor.main"] 
-# CMD ["python", "/app/ingestor/main.py"]
-CMD ["tail", "-f", "/dev/null"] 
+CMD ["python", "/app/ingestor/main.py"]
+# CMD ["tail", "-f", "/dev/null"] 

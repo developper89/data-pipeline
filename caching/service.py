@@ -18,7 +18,7 @@ logger = logging.getLogger("cache_service.service")
 class CacheService:
     """
     Main service class that consumes validated data from Kafka
-    and caches metadata in Redis.
+    and caches complete reading data (values, label, index, metadata) in Redis.
     """
     
     def __init__(self):
@@ -183,24 +183,24 @@ class CacheService:
                 logger.error(f"[{request_id}] Invalid ValidatedOutput format: {str(e)}")
                 return True  # Consider invalid message as processed (won't retry)
                 
-            # Cache the metadata directly using cache_reading
+            # Cache the complete reading data using cache_reading
             device_id = validated_output.device_id
             if not device_id:
                 logger.warning("No device_id in validated output")
                 return True  # Consider missing device_id as processed (won't retry)
             
-            # Only cache if metadata exists and is not empty
-            if not validated_output.metadata:
-                logger.info(f"No metadata to cache for device {device_id}")
-                return True  # Consider message without metadata as processed (won't retry)
+            # Only cache if data exists and is not empty
+            if not any([validated_output.values, validated_output.label, validated_output.index, validated_output.metadata]):
+                logger.info(f"No meaningful data to cache for device {device_id}")
+                return True  # Consider message without meaningful data as processed (won't retry)
             
             success = await self.metadata_cache.cache_reading(device_id, validated_output)
             
             if success:
-                logger.info(f"Successfully cached reading for device {device_id}" +
+                logger.info(f"Successfully cached complete reading for device {device_id}" +
                            (f" with request_id {validated_output.request_id}" if hasattr(validated_output, 'request_id') else ""))
             else:
-                logger.error(f"Failed to cache reading for device {device_id}")
+                logger.error(f"Failed to cache complete reading for device {device_id}")
             
             # Always return True even if caching fails - we don't want to block the pipeline
             # for caching errors, just log them

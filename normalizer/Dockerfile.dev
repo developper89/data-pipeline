@@ -20,6 +20,6 @@ RUN uv pip install --system --no-cache-dir -r requirements.txt
 ENV PYTHONPATH=/app
 
 ENTRYPOINT ["docker-entrypoint.sh"]
-# CMD ["python", "/app/normalizer/main.py"]
+CMD ["python", "/app/normalizer/main.py"]
 # Alternative to keep container running indefinitely:
-CMD ["tail", "-f", "/dev/null"] 
+# CMD ["tail", "-f", "/dev/null"] 

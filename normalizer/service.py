@@ -81,6 +81,10 @@ class NormalizerService:
         self._stop_event = (
             asyncio.Event()
         )  # Use asyncio event if using async components
+        
+        # Debug data collection
+        self.debug_data: List[Dict[str, Any]] = []
+        self.debug_file_path = "/app/normalizer/debug_messages.json"
 
     async def _process_message(self, raw_msg_record) -> bool:
         """
@@ -107,9 +111,22 @@ class NormalizerService:
                 if "request_id" not in job_dict:
                     job_dict["request_id"] = generate_request_id()
                 raw_message = RawMessage(**job_dict)
-                if raw_message.device_id == "2207001":
-                    logger.info(f"raw message device_id : {raw_message.device_id}, payload_hex: {raw_message.payload_hex}")
+                # if raw_message.device_id == "2207001":
+                #     logger.info(f"raw message device_id : {raw_message.device_id}, payload_hex: {raw_message.payload_hex}")
                 request_id = raw_message.request_id
+                logger.info(f"device_id: {raw_message.device_id}, payload_hex: {raw_message.payload_hex}")
+                # Collect debug data
+                debug_entry = {
+                    "device_id": raw_message.device_id,
+                    "payload_hex": raw_message.payload_hex,
+                    "request_id": request_id,
+                    "timestamp": datetime.now().isoformat()
+                }
+                self.debug_data.append(debug_entry)
+                
+                # Save debug data every 100 entries to avoid memory buildup
+                if len(self.debug_data) >= 20:
+                    await self._save_debug_data()
                 # logger.debug(
                 #     f"[{request_id}] Validated RawMessage for device: {raw_message.device_id}"
                 # )
@@ -481,6 +498,63 @@ class NormalizerService:
                     
         return valid_outputs, all_errors
 
+    async def _save_debug_data(self):
+        """
+        Save collected debug data to JSON file and clear the in-memory list.
+        Overrides existing data for device_ids that already exist.
+        """
+        if not self.debug_data:
+            return
+            
+        try:
+            # Load existing data if file exists
+            existing_data = []
+            
+            if os.path.exists(self.debug_file_path):
+                try:
+                    with open(self.debug_file_path, 'r') as f:
+                        existing_data = json.load(f)
+                except (json.JSONDecodeError, Exception) as e:
+                    logger.warning(f"Could not read existing debug file: {e}. Starting fresh.")
+                    existing_data = []
+            
+            # Create a dictionary mapping device_id to entry for easier lookup and replacement
+            data_by_device_id = {}
+            for entry in existing_data:
+                device_id = entry.get('device_id')
+                if device_id:
+                    data_by_device_id[device_id] = entry
+            
+            # Process new entries - override existing or add new
+            updated_count = 0
+            new_count = 0
+            
+            for new_entry in self.debug_data:
+                device_id = new_entry.get('device_id')
+                if device_id:
+                    if device_id in data_by_device_id:
+                        # Override existing entry
+                        data_by_device_id[device_id] = new_entry
+                        updated_count += 1
+                    else:
+                        # Add new entry
+                        data_by_device_id[device_id] = new_entry
+                        new_count += 1
+            
+            # Convert back to list and save
+            updated_data = list(data_by_device_id.values())
+            
+            with open(self.debug_file_path, 'w') as f:
+                json.dump(updated_data, f, indent=2, ensure_ascii=False)
+            
+            logger.debug(f"Updated debug data: {updated_count} existing entries overridden, {new_count} new entries added to {self.debug_file_path}")
+            
+            # Clear the in-memory list
+            self.debug_data.clear()
+            
+        except Exception as e:
+            logger.error(f"Failed to save debug data: {e}")
+
     async def _publish_processing_error(
         self,
         error_type: str,
@@ -680,6 +754,8 @@ class NormalizerService:
             logger.info("Stop already requested.")
             return
         logger.info("Stop requested for Normalizer Service.")
+        
+        
         self._running = False
         self._stop_event.set()
         # Closing clients is handled in the finally block of the run loop upon exit.

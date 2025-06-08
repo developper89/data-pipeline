@@ -16,6 +16,4 @@ ENV PYTHONPATH="${PYTHONPATH}:/app"
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # Default command
-# CMD ["python", "-m", "cache_service.main"]
-CMD ["python", "/app/caching/main.py"]
-# CMD ["tail", "-f", "/dev/null"] 
+CMD ["python", "/app/ingestor-influxdb3/main.py"] 

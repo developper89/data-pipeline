@@ -231,11 +231,11 @@ class Validator:
                     converted_values.append(int(float(value)))
                 elif expected_type.lower() == 'boolean':
                     if isinstance(value, bool):
-                        converted_values.append(value)
+                        converted_values.append(int(value))
                     elif isinstance(value, str):
-                        converted_values.append(value.lower() in ('true', 'yes', '1'))
+                        converted_values.append(int(value.lower() in ('true', 'yes', '1')))
                     else:
-                        converted_values.append(bool(value))
+                        converted_values.append(int(bool(value)))
                 elif expected_type.lower() == 'string':
                     converted_values.append(str(value))
                 else:

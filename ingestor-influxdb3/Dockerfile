@@ -6,8 +6,10 @@ WORKDIR /app
 COPY requirements.txt .
 RUN uv pip install --system --no-cache-dir -r requirements.txt
 
+# Copy application code
+COPY . .
+
 # Make entrypoint script executable
-COPY docker-entrypoint.sh /app/
 RUN chmod +x /app/docker-entrypoint.sh
 
 ENV PYTHONPATH="${PYTHONPATH}:/app"
@@ -16,6 +18,4 @@ ENV PYTHONPATH="${PYTHONPATH}:/app"
 ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 # Default command
-# CMD ["python", "-m", "cache_service.main"]
-CMD ["python", "/app/caching/main.py"]
-# CMD ["tail", "-f", "/dev/null"] 
+CMD ["python", "/app/main.py"] 

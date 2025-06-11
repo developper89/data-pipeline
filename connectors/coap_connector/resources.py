@@ -422,38 +422,149 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
     def _interpret_varint_field(self, field_number: int, value: int) -> str:
         """Interpret varint fields based on field number and value."""
         if field_number == 2:
-            # Likely timestamp (Unix timestamp)
-            if value > 1000000000 and value < 2000000000:  # Reasonable timestamp range
-                try:
-                    timestamp = datetime.fromtimestamp(value, tz=timezone.utc)
-                    return f"Timestamp: {timestamp.isoformat()} ({value})"
-                except:
-                    pass
-            return f"Possible timestamp or sequence: {value}"
+            return self._interpret_timestamp_value(value, "Field 2")
             
         elif field_number == 3:
-            return f"Sequence number or count: {value}"
+            return f"Sequence number: {value}"
             
         elif field_number == 5:
-            # Could be measurement value (temperature, humidity, etc.)
-            if value < 1000:  # Likely direct measurement
-                return f"Measurement value: {value}"
-            else:  # Likely scaled measurement
-                scaled = value / 100.0  # Common scaling factor
-                return f"Scaled measurement: {scaled} (raw: {value})"
+            # Could be timestamp or measurement value
+            timestamp_result = self._interpret_timestamp_value(value, "Field 5")
+            if "Timestamp" in timestamp_result:
+                return timestamp_result
+            else:
+                return self._interpret_measurement_value(value, "primary")
                 
         elif field_number == 8:
-            return f"Status or type indicator: {value}"
+            return self._interpret_status_value(value)
             
         elif field_number == 9:
-            if value < 1000:
-                return f"Secondary measurement: {value}"
-            else:
-                scaled = value / 100.0
-                return f"Scaled secondary measurement: {scaled} (raw: {value})"
+            return self._interpret_measurement_value(value, "secondary")
                 
         else:
+            # Try timestamp interpretation for unknown large values
+            timestamp_result = self._interpret_timestamp_value(value, f"Field {field_number}")
+            if "Timestamp" in timestamp_result:
+                return timestamp_result
             return f"Unknown varint: {value}"
+    
+    def _interpret_timestamp_value(self, value: int, field_name: str) -> str:
+        """Enhanced timestamp interpretation with multiple precision detection."""
+        
+        # Unix timestamp (seconds) - 1970 to 2038 range
+        if 1000000000 <= value <= 2147483647:
+            try:
+                timestamp = datetime.fromtimestamp(value, tz=timezone.utc)
+                return f"Timestamp (seconds): {timestamp.isoformat()} ({value})"
+            except:
+                pass
+        
+        # Unix timestamp (milliseconds) - 2001 to 2286 range  
+        elif 1000000000000 <= value <= 9999999999999:
+            try:
+                timestamp = datetime.fromtimestamp(value / 1000.0, tz=timezone.utc)
+                return f"Timestamp (milliseconds): {timestamp.isoformat()} ({value})"
+            except:
+                pass
+        
+        # Unix timestamp (microseconds) - recent years
+        elif 1000000000000000 <= value <= 9999999999999999:
+            try:
+                timestamp = datetime.fromtimestamp(value / 1000000.0, tz=timezone.utc)
+                return f"Timestamp (microseconds): {timestamp.isoformat()} ({value})"
+            except:
+                pass
+        
+        # Epoch time variations (different base years)
+        elif 1700000000 <= value <= 1900000000:  # 2023-2030 range
+            try:
+                timestamp = datetime.fromtimestamp(value, tz=timezone.utc)
+                return f"Timestamp (epoch): {timestamp.isoformat()} ({value})"
+            except:
+                pass
+        
+        # Relative timestamp (seconds since device boot/start)
+        elif 0 <= value <= 86400:  # 0-24 hours
+            hours = value // 3600
+            minutes = (value % 3600) // 60
+            seconds = value % 60
+            return f"Relative time: {hours:02d}:{minutes:02d}:{seconds:02d} ({value}s since start)"
+        
+        # Small values - likely sequence or count
+        elif value < 1000:
+            return f"Sequence/count: {value}"
+        
+        return f"Numeric value: {value}"
+    
+    def _interpret_measurement_value(self, value: int, measurement_type: str) -> str:
+        """Interpret measurement values with unit detection and scaling."""
+        
+        # Temperature range detection (scaled)
+        if 1500 <= value <= 5000:  # 15.00°C to 50.00°C (scaled by 100)
+            temp_c = value / 100.0
+            temp_f = (temp_c * 9/5) + 32
+            return f"Temperature: {temp_c}°C ({temp_f:.1f}°F) - {measurement_type}"
+        
+        # Humidity range detection (scaled)
+        elif 0 <= value <= 10000:  # 0% to 100% (scaled by 100)
+            if value <= 100:
+                return f"Humidity: {value}% - {measurement_type}"
+            else:
+                humidity = value / 100.0
+                return f"Humidity: {humidity}% - {measurement_type}"
+        
+        # Pressure range detection (Pascal or scaled)
+        elif 80000 <= value <= 120000:  # Atmospheric pressure range
+            pressure_hpa = value / 100.0
+            return f"Pressure: {pressure_hpa} hPa - {measurement_type}"
+        
+        # Light intensity (Lux)
+        elif 0 <= value <= 100000:
+            if value < 1000:
+                return f"Light: {value} lux - {measurement_type}"
+            else:
+                return f"Light: {value/100.0} klux - {measurement_type}"
+        
+        # Battery level (mV or percentage)
+        elif 2500 <= value <= 4200:  # Battery voltage range (mV)
+            voltage = value / 1000.0
+            return f"Battery: {voltage}V - {measurement_type}"
+        
+        # Generic scaling detection
+        elif value > 1000:
+            # Try common scaling factors
+            scaled_100 = value / 100.0
+            scaled_1000 = value / 1000.0
+            return f"Scaled value: {scaled_100} (÷100) or {scaled_1000} (÷1000) - raw: {value} - {measurement_type}"
+        
+        return f"Raw measurement: {value} - {measurement_type}"
+    
+    def _interpret_status_value(self, value: int) -> str:
+        """Interpret status and state values."""
+        
+        # Common status patterns
+        status_meanings = {
+            0: "Inactive/Off/OK",
+            1: "Active/On/Normal",
+            2: "Warning/Standby", 
+            3: "Error/Critical",
+            4: "Maintenance/Test",
+            9: "Unknown/Invalid"
+        }
+        
+        if value in status_meanings:
+            return f"Status: {status_meanings[value]} ({value})"
+        
+        # Bit flags interpretation
+        if value > 0 and value < 256:  # Single byte flags
+            flags = []
+            for i in range(8):
+                if value & (1 << i):
+                    flags.append(f"bit{i}")
+            if flags:
+                return f"Status flags: {','.join(flags)} ({value})"
+        
+        return f"Status code: {value}"
     
     def _interpret_length_delimited_field(self, field_number: int, data: bytes) -> tuple:
         """Interpret length-delimited fields and return (value, description)."""
@@ -497,25 +608,63 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
             # Try to parse as nested protobuf structure
             if len(data) >= 3:
                 # Check if it looks like nested protobuf
-                if data[0] in [0x08, 0x10, 0x18, 0x20]:  # Common protobuf field tags
+                if data[0] in [0x08, 0x10, 0x18, 0x20, 0x28, 0x30]:  # Common protobuf field tags
                     nested_data = self._parse_nested_protobuf(data)
                     if nested_data:
-                        return nested_data, f"Sensor reading: {nested_data}"
+                        # Create a readable summary of the sensor data
+                        summary = self._create_sensor_summary(nested_data)
+                        return nested_data, f"Sensor reading: {summary}"
             
             # Fallback to raw interpretation
             if len(data) == 1:
-                return data[0], f"Single byte sensor value: {data[0]}"
+                value = data[0]
+                interpretation = self._interpret_measurement_value(value, "raw_byte")
+                return value, f"Single byte: {interpretation}"
             elif len(data) == 2:
                 value = int.from_bytes(data, 'little')
-                return value, f"16-bit sensor value: {value}"
+                interpretation = self._interpret_measurement_value(value, "raw_16bit")
+                return value, f"16-bit value: {interpretation}"
             elif len(data) == 4:
                 value = int.from_bytes(data, 'little')
-                return value, f"32-bit sensor value: {value}"
+                interpretation = self._interpret_measurement_value(value, "raw_32bit")
+                return value, f"32-bit value: {interpretation}"
             else:
                 return data.hex(), f"Complex sensor data (hex): {data.hex()}"
                 
         except Exception as e:
             return data.hex(), f"Sensor data parsing failed (hex): {data.hex()}"
+    
+    def _create_sensor_summary(self, nested_data: dict) -> str:
+        """Create a human-readable summary of parsed sensor data."""
+        summary_parts = []
+        
+        # Extract key information
+        if "sensor_id" in nested_data:
+            sensor_info = nested_data["sensor_id"]
+            summary_parts.append(sensor_info["interpretation"])
+        
+        if "measurement_value" in nested_data:
+            measurement_info = nested_data["measurement_value"]
+            summary_parts.append(f"Value: {measurement_info['interpretation']}")
+        
+        if "sensor_type_or_timestamp" in nested_data:
+            type_info = nested_data["sensor_type_or_timestamp"]
+            if "Timestamp" in type_info["interpretation"]:
+                summary_parts.append(f"Time: {type_info['interpretation']}")
+            else:
+                summary_parts.append(f"Type: {type_info['interpretation']}")
+        
+        if "timestamp_or_metadata" in nested_data:
+            timestamp_info = nested_data["timestamp_or_metadata"]
+            summary_parts.append(f"Metadata: {timestamp_info['interpretation']}")
+        
+        # Add any other significant fields
+        for key, value in nested_data.items():
+            if key not in ["sensor_id", "measurement_value", "sensor_type_or_timestamp", "timestamp_or_metadata"]:
+                if isinstance(value, dict) and "interpretation" in value:
+                    summary_parts.append(f"{key}: {value['interpretation']}")
+        
+        return " | ".join(summary_parts) if summary_parts else "Unknown sensor data"
     
     def _parse_nested_protobuf(self, data: bytes) -> dict:
         """Parse nested protobuf structure within sensor data."""
@@ -536,22 +685,110 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                     value, bytes_consumed = self._read_varint(data, offset)
                     offset += bytes_consumed
                     
-                    # Interpret common sensor field numbers
+                    # Enhanced interpretation of sensor fields
                     if field_number == 1:
-                        nested_fields["sensor_id"] = value
+                        nested_fields["sensor_id"] = {
+                            "value": value,
+                            "interpretation": self._interpret_sensor_id(value)
+                        }
                     elif field_number == 2:
-                        nested_fields["sensor_type"] = value
+                        nested_fields["sensor_type_or_timestamp"] = {
+                            "value": value,
+                            "interpretation": self._interpret_sensor_type_or_timestamp(value)
+                        }
                     elif field_number == 3:
-                        nested_fields["value"] = value
+                        nested_fields["measurement_value"] = {
+                            "value": value,
+                            "interpretation": self._interpret_measurement_value(value, "sensor")
+                        }
                     elif field_number == 4:
-                        nested_fields["timestamp"] = value
+                        nested_fields["timestamp_or_metadata"] = {
+                            "value": value,
+                            "interpretation": self._interpret_timestamp_value(value, "nested")
+                        }
                     else:
-                        nested_fields[f"field_{field_number}"] = value
+                        nested_fields[f"field_{field_number}"] = {
+                            "value": value,
+                            "interpretation": f"Unknown sensor field: {value}"
+                        }
+                        
+                elif wire_type == 2:  # Length-delimited (nested data)
+                    if offset >= len(data):
+                        break
+                    length = data[offset]
+                    offset += 1
+                    
+                    if offset + length <= len(data):
+                        nested_data = data[offset:offset + length]
+                        nested_fields[f"nested_field_{field_number}"] = {
+                            "value": nested_data.hex(),
+                            "interpretation": f"Nested data: {nested_data.hex()}"
+                        }
+                        offset += length
+                    else:
+                        break
                         
                 else:
-                    break  # Only handle varints in nested structure for now
+                    break  # Skip unknown wire types
             
             return nested_fields
             
         except Exception as e:
             return None
+    
+    def _interpret_sensor_id(self, sensor_id: int) -> str:
+        """Interpret sensor ID values."""
+        sensor_types = {
+            1: "Temperature sensor",
+            2: "Humidity sensor", 
+            3: "Pressure sensor",
+            4: "Light sensor",
+            5: "Motion sensor",
+            6: "Battery monitor",
+            7: "GPS module",
+            8: "Accelerometer",
+            9: "Gyroscope",
+            10: "Magnetometer"
+        }
+        
+        if sensor_id in sensor_types:
+            return f"{sensor_types[sensor_id]} (ID: {sensor_id})"
+        
+        return f"Unknown sensor type (ID: {sensor_id})"
+    
+    def _interpret_sensor_type_or_timestamp(self, value: int) -> str:
+        """Interpret values that could be sensor types or timestamps."""
+        
+        # Check if it's likely a timestamp first
+        timestamp_result = self._interpret_timestamp_value(value, "sensor_field")
+        if "Timestamp" in timestamp_result:
+            return timestamp_result
+        
+        # Check if it's a sensor type code
+        if value < 100:
+            sensor_type_names = {
+                0: "Digital sensor",
+                1: "Analog sensor",
+                2: "I2C sensor", 
+                3: "SPI sensor",
+                4: "1-Wire sensor",
+                5: "UART sensor",
+                10: "Temperature",
+                11: "Humidity",
+                12: "Pressure",
+                13: "Light",
+                14: "Motion",
+                15: "Proximity"
+            }
+            
+            if value in sensor_type_names:
+                return f"Sensor type: {sensor_type_names[value]}"
+        
+        # Check for encoded sensor information (bits)
+        if 100 <= value <= 65535:  # 16-bit encoded value
+            sensor_family = (value >> 8) & 0xFF  # Upper 8 bits
+            sensor_subtype = value & 0xFF        # Lower 8 bits
+            return f"Encoded sensor: family={sensor_family}, subtype={sensor_subtype}"
+        
+        # Default interpretation
+        return f"Sensor type code or timestamp: {value}"

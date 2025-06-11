@@ -134,12 +134,12 @@ class DataRootResource(resource.Site): # Inherit from Site for automatic child h
         self.command_consumer = command_consumer
         logger.debug(f"Initialized DataRootResource.")
 
-    async def render(self, request):
-         # Requests directly to the root (e.g., /data) are not allowed
-         logger.warning(f"Request received directly to data root path {request.opt.uri_path}. Method Not Allowed.")
-         return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED)
+    # async def render(self, request):
+    #      # Requests directly to the root (e.g., /data) are not allowed
+    #      logger.warning(f"Request received directly to data root path {request.opt.uri_path}. Method Not Allowed.")
+    #      return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED)
 
-    async def _find_child_and_pathstripped_message(self, request: aiocoap.interfaces.Request):
+    async def _find_child_and_pathstripped_message(self, request):
         #  """
         #  Dynamically create a handler for the device ID path segment.
         #  'path' contains the remaining path segments.
@@ -157,8 +157,8 @@ class DataRootResource(resource.Site): # Inherit from Site for automatic child h
         )
         
         # Add comprehensive debug logging
-        logger.debug(f"Request received - URI: {original_request_uri}")
-        logger.debug(f"Path components: {request.opt.uri_path}")
+        logger.info(f"Request received - URI: {original_request_uri}")
+        logger.info(f"Path components: {request.opt.uri_path}")
         
         # Continue with the rest of the original method implementation
         if request.opt.uri_path in self._resources:

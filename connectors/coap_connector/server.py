@@ -46,7 +46,7 @@ class CoapGatewayServer:
             )
             from datetime import datetime
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            logger.info(f"[{timestamp}] Registered CoAP endpoint at path: /{'/'.join(config.COAP_BASE_DATA_PATH)}/{{device_id}}")
+            logger.info(f"[{timestamp}] Registered CoAP 2 endpoint at path: /{'/'.join(config.COAP_BASE_DATA_PATH)}/{{device_id}}")
             logger.info("CoAP server context created successfully.")
 
             # Keep the server running until stop event is set

@@ -34,9 +34,13 @@ class CoapGatewayServer:
             # Create the data resource that will handle both device data and commands
             data_root = DataRootResource(self.kafka_producer, self.command_consumer)
             
+            # Create a root site and mount the data resource under the configured path
+            root_site = resource.Site()
+            root_site.add_resource(['*'], data_root)
+            
             # The aiocoap server context needs the site root
             self.protocol = await aiocoap.Context.create_server_context(
-                data_root,  # Pass DataRootResource as the site root
+                root_site,  # Pass DataRootResource as the site root
                 bind=(self.host, self.port)
             )
             logger.info(f"Registered CoAP endpoint at path: /{'/'.join(config.COAP_BASE_DATA_PATH)}/{{device_id}}")

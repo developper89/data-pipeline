@@ -50,14 +50,19 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         logger.info(f"  Path Components: {uri_path}")
         logger.info(f"  Payload Size: {payload_size} bytes")
         
-        if payload_size == 0:
-            logger.warning(f"[{request_id}] Empty payload received for device {self.device_id}. Sending Bad Request.")
-            return aiocoap.Message(code=aiocoap.Code.BAD_REQUEST, payload=b"Payload must not be empty")
-
-
         # Log and analyze payload if present
-        logger.info(f"  Payload (hex): {request.payload.hex()}")
-        self._analyze_payload(request.payload, request_id)
+        extracted_device_id = None
+        if payload_size > 0:
+            logger.info(f"  Payload (hex): {request.payload.hex()}")
+            
+            # Try to extract device ID from payload
+            extracted_device_id = self._extract_device_id_from_payload(request.payload, request_id)
+            if extracted_device_id:
+                logger.info(f"  🏷️  EXTRACTED DEVICE ID: '{extracted_device_id}'")
+            
+            self._analyze_payload(request.payload, request_id)
+        else:
+            logger.warning(f"  ⚠️  Empty payload - no device ID to extract")
         
         try:
             payload_text = request.payload.decode('utf-8', errors='replace')[:100]
@@ -255,3 +260,120 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
             logger.info(f"       Low entropy - likely structured/compressed data")
         elif entropy_ratio > 0.8:
             logger.info(f"       High entropy - likely random/encrypted data")
+    
+    def _extract_device_id_from_payload(self, payload: bytes, request_id: str) -> str:
+        """Extract device ID from protobuf payload."""
+        try:
+            # Try to parse protobuf and extract field 1 (most likely device ID)
+            device_id = self._parse_protobuf_field(payload, field_number=1)
+            if device_id:
+                logger.info(f"    🔍 Found device ID in protobuf field 1: '{device_id}'")
+                return device_id
+            
+            # Try field 16 as fallback (could also contain device metadata)
+            device_id = self._parse_protobuf_field(payload, field_number=16)
+            if device_id:
+                logger.info(f"    🔍 Found device ID in protobuf field 16: '{device_id}'")
+                return device_id
+                
+            # If protobuf parsing fails, try to find patterns in raw bytes
+            device_id = self._extract_device_id_from_raw_bytes(payload)
+            if device_id:
+                logger.info(f"    🔍 Found device ID in raw bytes: '{device_id}'")
+                return device_id
+                
+        except Exception as e:
+            logger.info(f"    ❌ Device ID extraction failed: {e}")
+        
+        return None
+    
+    def _parse_protobuf_field(self, payload: bytes, field_number: int) -> str:
+        """Parse specific protobuf field and return its string value."""
+        try:
+            offset = 0
+            while offset < len(payload):
+                if offset >= len(payload):
+                    break
+                    
+                # Read tag (field number + wire type)
+                tag = payload[offset]
+                found_field_number = tag >> 3
+                wire_type = tag & 0x07
+                offset += 1
+                
+                # Check if this is the field we're looking for
+                if found_field_number == field_number and wire_type == 2:  # Length-delimited
+                    if offset >= len(payload):
+                        break
+                        
+                    # Read length
+                    length = payload[offset]
+                    offset += 1
+                    
+                    # Read the actual data
+                    if offset + length <= len(payload):
+                        field_data = payload[offset:offset + length]
+                        
+                        # Try to decode as UTF-8 string
+                        try:
+                            device_id = field_data.decode('utf-8')
+                            if device_id and device_id.isprintable():
+                                return device_id
+                        except UnicodeDecodeError:
+                            # If not UTF-8, return as hex string
+                            return field_data.hex()
+                    
+                    break
+                    
+                # Skip this field's value based on wire type
+                elif wire_type == 0:  # Varint
+                    while offset < len(payload) and payload[offset] & 0x80:
+                        offset += 1
+                    offset += 1
+                elif wire_type == 1:  # 64-bit
+                    offset += 8
+                elif wire_type == 2:  # Length-delimited (not our target field)
+                    if offset >= len(payload):
+                        break
+                    length = payload[offset]
+                    offset += 1 + length
+                elif wire_type == 5:  # 32-bit
+                    offset += 4
+                else:
+                    break  # Unknown wire type
+                    
+        except Exception as e:
+            logger.debug(f"Protobuf field {field_number} parsing failed: {e}")
+        
+        return None
+    
+    def _extract_device_id_from_raw_bytes(self, payload: bytes) -> str:
+        """Try to extract device ID from raw bytes using pattern matching."""
+        try:
+            # Look for printable ASCII strings of reasonable length (4-20 chars)
+            current_string = ""
+            found_strings = []
+            
+            for byte in payload:
+                if 32 <= byte <= 126:  # Printable ASCII
+                    current_string += chr(byte)
+                else:
+                    if 4 <= len(current_string) <= 20:
+                        found_strings.append(current_string)
+                    current_string = ""
+            
+            # Check the last string
+            if 4 <= len(current_string) <= 20:
+                found_strings.append(current_string)
+            
+            # Return the first reasonable string found
+            for s in found_strings:
+                # Filter out strings that look like device IDs
+                if any(char.isalnum() for char in s):  # Contains alphanumeric
+                    logger.info(f"    Found potential device ID string: '{s}'")
+                    return s
+                    
+        except Exception as e:
+            logger.debug(f"Raw bytes device ID extraction failed: {e}")
+        
+        return None

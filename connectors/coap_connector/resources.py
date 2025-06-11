@@ -172,7 +172,8 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         try:
             decoded = base64.b64decode(payload)
             logger.info(f"    ✅ Base64 decode successful: {len(decoded)} bytes")
-            logger.info(f"       Decoded hex: {decoded[:20].hex()}...")
+            logger.info(f"       Decoded: {decoded}...")
+            logger.info(f"       Decoded hex: {decoded.hex()}...")
         except:
             logger.info(f"    ❌ Not base64 encoded")
             

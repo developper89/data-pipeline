@@ -139,27 +139,74 @@ class DataRootResource(resource.Site): # Inherit from Site for automatic child h
          logger.warning(f"Request received directly to data root path {request.opt.uri_path}. Method Not Allowed.")
          return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED)
 
-    async def get_child(self, path: tuple, request: aiocoap.interfaces.Request):
-         """
-         Dynamically create a handler for the device ID path segment.
-         'path' contains the remaining path segments.
-         """
-         logger.debug(f"Request for device sub-path '{path}'. Creating handler.")
-         if len(path) == 1: # Expecting only one segment: the device ID
-             device_id_bytes = path[0]
-             try:
-                 device_id = device_id_bytes.decode('utf-8')
-                 logger.debug(f"Request for device sub-path '{device_id}'. Creating handler.")
-                 # Return a *new instance* of the handler for this specific device ID
-                 return DeviceDataHandlerResource(device_id, self.kafka_producer, self.command_consumer)
-             except UnicodeDecodeError:
-                  logger.warning(f"Invalid UTF-8 in path element: {device_id_bytes!r}. Rejecting request.")
-                  # Returning None results in 4.04 Not Found
-                  return None
-             except Exception as e:
-                 logger.exception(f"Error creating child resource for path element {device_id_bytes!r}: {e}")
-                 return None
-         else:
-             # Path doesn't match /data/{device_id} structure
-             logger.warning(f"Request path structure not recognized: {path}")
-             return None # Results in 4.04 Not Found
+    async def _find_child_and_pathstripped_message(self, request: aiocoap.interfaces.Request):
+        #  """
+        #  Dynamically create a handler for the device ID path segment.
+        #  'path' contains the remaining path segments.
+        #  """
+        """Override the original method to add our debug print statement.
+        
+        This method finds the child that will handle the request and strips
+        all path components that are covered by the child's position within
+        the site.
+        """
+        original_request_uri = getattr(
+            request,
+            "_original_request_uri",
+            request.get_request_uri(local_is_server=True),
+        )
+        
+        # Add comprehensive debug logging
+        logger.debug(f"Request received - URI: {original_request_uri}")
+        logger.debug(f"Path components: {request.opt.uri_path}")
+        
+        # Continue with the rest of the original method implementation
+        if request.opt.uri_path in self._resources:
+            logger.debug(f"Found exact resource match for path: {request.opt.uri_path}")
+            stripped = request.copy(uri_path=())
+            stripped._original_request_uri = original_request_uri
+            return self._resources[request.opt.uri_path], stripped
+
+        if not request.opt.uri_path:
+            logger.debug("No URI path components, resource not found")
+            raise KeyError()
+
+        remainder = [request.opt.uri_path[-1]]
+        path = request.opt.uri_path[:-1]
+        logger.debug(f"Looking for partial path match. Initial path: {path}, remainder: {remainder}")
+        
+        while path:
+            logger.debug(f"Checking path: {path}")
+            if path in self._subsites:
+                res = self._subsites[path]
+                logger.debug(f"Found matching subsite for path: {path}")
+                if remainder == [""]:
+                    # sub-sites should see their root resource like sites
+                    remainder = []
+                stripped = request.copy(uri_path=remainder)
+                stripped._original_request_uri = original_request_uri
+                logger.debug(f"Forwarding to subsite with remainder: {remainder}")
+                return res, stripped
+            remainder.insert(0, path[-1])
+            path = path[:-1]
+            
+        logger.debug(f"No matching resource found for path: {request.opt.uri_path}")
+        raise KeyError()
+        #  if len(path) == 1: # Expecting only one segment: the device ID
+        #      device_id_bytes = path[0]
+        #      try:
+        #          device_id = device_id_bytes.decode('utf-8')
+        #          logger.debug(f"Request for device sub-path '{device_id}'. Creating handler.")
+        #          # Return a *new instance* of the handler for this specific device ID
+        #          return DeviceDataHandlerResource(device_id, self.kafka_producer, self.command_consumer)
+        #      except UnicodeDecodeError:
+        #           logger.warning(f"Invalid UTF-8 in path element: {device_id_bytes!r}. Rejecting request.")
+        #           # Returning None results in 4.04 Not Found
+        #           return None
+        #      except Exception as e:
+        #          logger.exception(f"Error creating child resource for path element {device_id_bytes!r}: {e}")
+        #          return None
+        #  else:
+        #      # Path doesn't match /data/{device_id} structure
+        #      logger.warning(f"Request path structure not recognized: {path}")
+        #      return None # Results in 4.04 Not Found

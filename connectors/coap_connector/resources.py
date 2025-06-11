@@ -175,7 +175,7 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         # Log payload preview if present
         if payload_size > 0:
             payload_preview = request.payload[:50]  # First 50 bytes
-            logger.info(f"  Payload Preview (hex): {payload_preview.hex()}")
+            logger.info(f"  Payload (hex): {request.payload.hex()}")
             try:
                 payload_text = request.payload.decode('utf-8', errors='replace')[:100]
                 logger.info(f"  Payload Preview (text): {repr(payload_text)}")
@@ -188,8 +188,6 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         logger.warning(f"[{request_id}] Request received directly to root. Method Not Allowed.")
         return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED, payload=b"Direct root access not allowed")
 
-
-    def _find_child_and_pathstripped_message(self, request):
         #  """
         #  Dynamically create a handler for the device ID path segment.
         #  'path' contains the remaining path segments.

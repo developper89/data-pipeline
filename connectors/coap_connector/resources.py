@@ -140,73 +140,73 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED, payload=b"Direct root access not allowed")
 
     # async def render(self, request):
-        """Monitor all incoming requests and log details."""
-        self.request_count += 1
-        request_id = f"REQ-{self.request_count:04d}"
+    #     """Monitor all incoming requests and log details."""
+    #     self.request_count += 1
+    #     request_id = f"REQ-{self.request_count:04d}"
         
-        # Extract request details
-        method = request.code.name if hasattr(request.code, 'name') else str(request.code)
-        source = request.remote.hostinfo if hasattr(request.remote, 'hostinfo') else str(request.remote)
-        payload_size = len(request.payload) if request.payload else 0
-        uri_path = list(request.opt.uri_path) if request.opt.uri_path else []
-        full_uri = request.get_request_uri() if hasattr(request, 'get_request_uri') else "unknown"
+    #     # Extract request details
+    #     method = request.code.name if hasattr(request.code, 'name') else str(request.code)
+    #     source = request.remote.hostinfo if hasattr(request.remote, 'hostinfo') else str(request.remote)
+    #     payload_size = len(request.payload) if request.payload else 0
+    #     uri_path = list(request.opt.uri_path) if request.opt.uri_path else []
+    #     full_uri = request.get_request_uri() if hasattr(request, 'get_request_uri') else "unknown"
         
-        # Log comprehensive request details
-        logger.info("=" * 80)
-        logger.info(f"🔍 INCOMING CoAP REQUEST [{request_id}]")
-        logger.info(f"  Method: {method}")
-        logger.info(f"  Source: {source}")
-        logger.info(f"  Full URI: {full_uri}")
-        logger.info(f"  Path Components: {uri_path}")
-        logger.info(f"  Payload Size: {payload_size} bytes")
+    #     # Log comprehensive request details
+    #     logger.info("=" * 80)
+    #     logger.info(f"🔍 INCOMING CoAP REQUEST [{request_id}]")
+    #     logger.info(f"  Method: {method}")
+    #     logger.info(f"  Source: {source}")
+    #     logger.info(f"  Full URI: {full_uri}")
+    #     logger.info(f"  Path Components: {uri_path}")
+    #     logger.info(f"  Payload Size: {payload_size} bytes")
         
-        # Log CoAP options
-        if hasattr(request, 'opt'):
-            logger.info(f"  CoAP Options:")
-            for option_name in dir(request.opt):
-                if not option_name.startswith('_'):
-                    try:
-                        option_value = getattr(request.opt, option_name)
-                        if option_value is not None and option_value != []:
-                            logger.info(f"    {option_name}: {option_value}")
-                    except:
-                        pass
+    #     # Log CoAP options
+    #     if hasattr(request, 'opt'):
+    #         logger.info(f"  CoAP Options:")
+    #         for option_name in dir(request.opt):
+    #             if not option_name.startswith('_'):
+    #                 try:
+    #                     option_value = getattr(request.opt, option_name)
+    #                     if option_value is not None and option_value != []:
+    #                         logger.info(f"    {option_name}: {option_value}")
+    #                 except:
+    #                     pass
         
-        # Log payload preview if present
-        if payload_size > 0:# First 50 bytes
-            logger.info(f"  Payload (hex): {request.payload.hex()}")
-            try:
-                payload_text = request.payload.decode('utf-8', errors='replace')[:100]
-                logger.info(f"  Payload Preview (text): {repr(payload_text)}")
-            except:
-                pass
+    #     # Log payload preview if present
+    #     if payload_size > 0:# First 50 bytes
+    #         logger.info(f"  Payload (hex): {request.payload.hex()}")
+    #         try:
+    #             payload_text = request.payload.decode('utf-8', errors='replace')[:100]
+    #             logger.info(f"  Payload Preview (text): {repr(payload_text)}")
+    #         except:
+    #             pass
                 
-        logger.info("=" * 80)
+    #     logger.info("=" * 80)
         
-        # For now, just return Method Not Allowed for all direct requests
-        logger.warning(f"[{request_id}] Request received directly to root. Method Not Allowed.")
-        return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED, payload=b"Direct root access not allowed")
+    #     # For now, just return Method Not Allowed for all direct requests
+    #     logger.warning(f"[{request_id}] Request received directly to root. Method Not Allowed.")
+    #     return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED, payload=b"Direct root access not allowed")
 
         #  """
         #  Dynamically create a handler for the device ID path segment.
         #  'path' contains the remaining path segments.
         #  """
 
-        if len(path) == 1: # Expecting only one segment: the device ID
-            device_id_bytes = path[0]
-            try:
-                device_id = device_id_bytes.decode('utf-8')
-                logger.debug(f"Request for device sub-path '{device_id}'. Creating handler.")
-                # Return a *new instance* of the handler for this specific device ID
-                return DeviceDataHandlerResource(device_id, self.kafka_producer, self.command_consumer)
-            except UnicodeDecodeError:
-                logger.warning(f"Invalid UTF-8 in path element: {device_id_bytes!r}. Rejecting request.")
-                # Returning None results in 4.04 Not Found
-                return None
-            except Exception as e:
-                logger.exception(f"Error creating child resource for path element {device_id_bytes!r}: {e}")
-                return None
-        else:
-            # Path doesn't match /data/{device_id} structure
-            logger.warning(f"Request path structure not recognized: {path}")
-            return None # Results in 4.04 Not Found
+        # if len(path) == 1: # Expecting only one segment: the device ID
+        #     device_id_bytes = path[0]
+        #     try:
+        #         device_id = device_id_bytes.decode('utf-8')
+        #         logger.debug(f"Request for device sub-path '{device_id}'. Creating handler.")
+        #         # Return a *new instance* of the handler for this specific device ID
+        #         return DeviceDataHandlerResource(device_id, self.kafka_producer, self.command_consumer)
+        #     except UnicodeDecodeError:
+        #         logger.warning(f"Invalid UTF-8 in path element: {device_id_bytes!r}. Rejecting request.")
+        #         # Returning None results in 4.04 Not Found
+        #         return None
+        #     except Exception as e:
+        #         logger.exception(f"Error creating child resource for path element {device_id_bytes!r}: {e}")
+        #         return None
+        # else:
+        #     # Path doesn't match /data/{device_id} structure
+        #     logger.warning(f"Request path structure not recognized: {path}")
+        #     return None # Results in 4.04 Not Found

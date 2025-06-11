@@ -144,6 +144,7 @@ class DataRootResource(resource.Site): # Inherit from Site for automatic child h
          Dynamically create a handler for the device ID path segment.
          'path' contains the remaining path segments.
          """
+         logger.debug(f"Request for device sub-path '{path}'. Creating handler.")
          if len(path) == 1: # Expecting only one segment: the device ID
              device_id_bytes = path[0]
              try:

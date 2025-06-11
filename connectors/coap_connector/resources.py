@@ -122,7 +122,7 @@ class DeviceDataHandlerResource(resource.Resource):
             return aiocoap.Message(code=aiocoap.Code.INTERNAL_SERVER_ERROR, payload=b"Internal server error during processing")
 
 
-class DataRootResource(resource.Site): # Inherit from Site for automatic child handling
+class DataRootResource(resource.Resource): # Inherit from Site for automatic child handling
     """
     Acts as a factory for DeviceDataHandlerResource based on path.
     Listens on the base path (e.g., /data) and delegates requests

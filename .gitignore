@@ -86,3 +86,5 @@ storage/temp/*
 *.bak
 *.backup
 *~ 
+ingestor-influxdb3
+normalizer/debug_messages.json

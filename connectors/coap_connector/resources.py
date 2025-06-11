@@ -60,93 +60,28 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
             if extracted_device_id:
                 logger.info(f"  🏷️  EXTRACTED DEVICE ID: '{extracted_device_id}'")
             
+            # Extract all protobuf data
+            extracted_data = self._extract_all_protobuf_data(request.payload, request_id)
+            if extracted_data:
+                logger.info(f"  📊 EXTRACTED SENSOR DATA:")
+                for key, value in extracted_data.items():
+                    logger.info(f"    {key}: {value}")
+            
             self._analyze_payload(request.payload, request_id)
+            
+            try:
+                payload_text = request.payload.decode('utf-8', errors='replace')[:100]
+                logger.info(f"  Payload Preview (text): {repr(payload_text)}")
+            except:
+                pass
         else:
             logger.warning(f"  ⚠️  Empty payload - no device ID to extract")
-        
-        try:
-            payload_text = request.payload.decode('utf-8', errors='replace')[:100]
-            logger.info(f"  Payload Preview (text): {repr(payload_text)}")
-        except:
-            pass
                 
         logger.info("=" * 80)
+        
+        # For now, just return Method Not Allowed for all direct requests
         logger.warning(f"[{request_id}] Request received directly to root. Method Not Allowed.")
         return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED, payload=b"Direct root access not allowed")
-        
-        # try:
-        #     # 1. Prepare the RawMessage
-        #     raw_message = RawMessage(
-        #         request_id=request_id, # Include the generated request ID
-        #         device_id=self.device_id,
-        #         payload_hex=request.payload.hex(),  # Convert binary to hex string
-        #         protocol="coap",
-        #         metadata={
-        #             "source_address": source,
-        #             "method": method,
-        #             "uri_path": full_uri,
-        #             "path_components": uri_path,
-        #             "payload_size": payload_size,
-        #         }
-        #     )
-
-        #     # 2. Publish to Kafka (Synchronous call to the wrapper)
-        #     try:
-        #         self.kafka_producer.publish_raw_message(raw_message)
-        #         # Logging is handled within the wrapper
-        #     except (KafkaError, Exception) as publish_err:
-        #          # If publishing fails, log the error and return a server error to CoAP client
-        #          logger.error(f"[{request_id}] Failed to publish CoAP data to Kafka for device {self.device_id}: {publish_err}")
-        #          # Attempt to publish a gateway error event (this might also fail)
-        #          try:
-        #               self.kafka_producer.publish_error(
-        #                    "Kafka Publish Failed", str(publish_err),
-        #                    {"device_id": self.device_id, "method": method},
-        #                    request_id=request_id
-        #               )
-        #          except Exception as e_pub_err:
-        #               logger.error(f"[{request_id}] Additionally failed to publish gateway error event after Kafka failure: {e_pub_err}")
-
-        #          return aiocoap.Message(code=aiocoap.Code.INTERNAL_SERVER_ERROR, payload=b"Failed to forward data internally")
-
-        #     # 3. Check for pending commands for this device
-        #     # Try to get a formatted command using the bidirectional parser
-        #     formatted_command = await self.command_consumer.get_formatted_command(self.device_id)
-            
-        #     if formatted_command:
-        #         # Get the command details for logging
-        #         pending_commands = self.command_consumer.get_pending_commands(self.device_id)
-        #         command_id = pending_commands[0].get("request_id", "unknown") if pending_commands else "unknown"
-                
-        #         logger.info(f"[{request_id}] Sending formatted command {command_id} to device {self.device_id}")
-                
-        #         # Acknowledge the command was sent (removes from pending)
-        #         if pending_commands:
-        #             self.command_consumer.acknowledge_command(self.device_id, command_id)
-                
-        #         # Send the formatted binary command in response
-        #         success_code = aiocoap.Code.CHANGED if method == "PUT" else aiocoap.Code.CREATED
-        #         return aiocoap.Message(code=success_code, payload=formatted_command)
-        #     else:
-        #         # No commands pending or no parser available - just send success code
-        #         success_code = aiocoap.Code.CHANGED if method == "PUT" else aiocoap.Code.CREATED
-        #         logger.debug(f"[{request_id}] Successfully processed data for {self.device_id}. No commands sent.")
-        #         return aiocoap.Message(code=success_code)
-            
-        # except Exception as e:
-        #     # Catch any other unexpected errors during RawMessage creation etc.
-        #     logger.exception(f"[{request_id}] Unexpected error processing CoAP request for device {self.device_id}: {e}")
-        #     # Attempt to publish a gateway error event
-        #     try:
-        #         self.kafka_producer.publish_error(
-        #             "CoAP Processing Error", str(e),
-        #             {"device_id": self.device_id, "method": method},
-        #             request_id=request_id
-        #          )
-        #     except Exception as e_pub_err:
-        #          logger.error(f"[{request_id}] Additionally failed to publish gateway error event after processing error: {e_pub_err}")
-
-        #     return aiocoap.Message(code=aiocoap.Code.INTERNAL_SERVER_ERROR, payload=b"Internal server error during processing")
 
     def _analyze_payload(self, payload: bytes, request_id: str):
         """Analyze payload and try to decode it in various formats."""
@@ -377,3 +312,246 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
             logger.debug(f"Raw bytes device ID extraction failed: {e}")
         
         return None
+
+    def _extract_all_protobuf_data(self, payload: bytes, request_id: str) -> dict:
+        """Extract all protobuf fields and interpret their meaning."""
+        extracted_data = {}
+        
+        try:
+            offset = 0
+            field_count = 0
+            
+            while offset < len(payload) and field_count < 20:  # Limit to prevent infinite loops
+                if offset >= len(payload):
+                    break
+                    
+                # Read tag (field number + wire type)
+                tag = payload[offset]
+                field_number = tag >> 3
+                wire_type = tag & 0x07
+                offset += 1
+                
+                # Extract field value based on wire type
+                field_value = None
+                field_description = ""
+                
+                if wire_type == 0:  # Varint
+                    field_value, bytes_consumed = self._read_varint(payload, offset)
+                    offset += bytes_consumed
+                    field_description = self._interpret_varint_field(field_number, field_value)
+                    
+                elif wire_type == 1:  # 64-bit
+                    if offset + 8 <= len(payload):
+                        field_value = int.from_bytes(payload[offset:offset+8], 'little')
+                        offset += 8
+                        field_description = f"64-bit value: {field_value}"
+                    else:
+                        break
+                        
+                elif wire_type == 2:  # Length-delimited
+                    if offset >= len(payload):
+                        break
+                    length = payload[offset]
+                    offset += 1
+                    
+                    if offset + length <= len(payload):
+                        field_data = payload[offset:offset + length]
+                        field_value, field_description = self._interpret_length_delimited_field(field_number, field_data)
+                        offset += length
+                    else:
+                        break
+                        
+                elif wire_type == 5:  # 32-bit
+                    if offset + 4 <= len(payload):
+                        field_value = int.from_bytes(payload[offset:offset+4], 'little')
+                        offset += 4
+                        field_description = f"32-bit value: {field_value}"
+                    else:
+                        break
+                else:
+                    break  # Unknown wire type
+                
+                # Store the extracted field
+                if field_value is not None:
+                    field_key = f"field_{field_number}"
+                    if field_key in extracted_data:
+                        # Handle repeated fields
+                        if not isinstance(extracted_data[field_key], list):
+                            extracted_data[field_key] = [extracted_data[field_key]]
+                        extracted_data[field_key].append({
+                            "value": field_value,
+                            "description": field_description,
+                            "wire_type": wire_type
+                        })
+                    else:
+                        extracted_data[field_key] = {
+                            "value": field_value,
+                            "description": field_description,
+                            "wire_type": wire_type
+                        }
+                
+                field_count += 1
+                
+        except Exception as e:
+            logger.info(f"    ❌ Protobuf data extraction failed: {e}")
+        
+        return extracted_data
+    
+    def _read_varint(self, payload: bytes, offset: int) -> tuple:
+        """Read a varint from the payload and return (value, bytes_consumed)."""
+        value = 0
+        shift = 0
+        bytes_consumed = 0
+        
+        while offset + bytes_consumed < len(payload):
+            byte = payload[offset + bytes_consumed]
+            bytes_consumed += 1
+            
+            value |= (byte & 0x7F) << shift
+            
+            if (byte & 0x80) == 0:  # MSB is 0, end of varint
+                break
+                
+            shift += 7
+            
+            if bytes_consumed > 10:  # Prevent infinite loop
+                break
+        
+        return value, bytes_consumed
+    
+    def _interpret_varint_field(self, field_number: int, value: int) -> str:
+        """Interpret varint fields based on field number and value."""
+        if field_number == 2:
+            # Likely timestamp (Unix timestamp)
+            if value > 1000000000 and value < 2000000000:  # Reasonable timestamp range
+                try:
+                    timestamp = datetime.fromtimestamp(value, tz=timezone.utc)
+                    return f"Timestamp: {timestamp.isoformat()} ({value})"
+                except:
+                    pass
+            return f"Possible timestamp or sequence: {value}"
+            
+        elif field_number == 3:
+            return f"Sequence number or count: {value}"
+            
+        elif field_number == 5:
+            # Could be measurement value (temperature, humidity, etc.)
+            if value < 1000:  # Likely direct measurement
+                return f"Measurement value: {value}"
+            else:  # Likely scaled measurement
+                scaled = value / 100.0  # Common scaling factor
+                return f"Scaled measurement: {scaled} (raw: {value})"
+                
+        elif field_number == 8:
+            return f"Status or type indicator: {value}"
+            
+        elif field_number == 9:
+            if value < 1000:
+                return f"Secondary measurement: {value}"
+            else:
+                scaled = value / 100.0
+                return f"Scaled secondary measurement: {scaled} (raw: {value})"
+                
+        else:
+            return f"Unknown varint: {value}"
+    
+    def _interpret_length_delimited_field(self, field_number: int, data: bytes) -> tuple:
+        """Interpret length-delimited fields and return (value, description)."""
+        if field_number == 1:
+            # Device ID field
+            try:
+                device_id = data.decode('utf-8')
+                if device_id.isprintable():
+                    return device_id, f"Device ID (UTF-8): {device_id}"
+            except UnicodeDecodeError:
+                pass
+            return data.hex(), f"Device ID (hex): {data.hex()}"
+            
+        elif field_number == 4:
+            # Sensor data field (appears multiple times)
+            return self._parse_sensor_data(data)
+            
+        elif field_number == 16:
+            # Metadata field
+            try:
+                metadata = data.decode('utf-8')
+                if metadata.isprintable():
+                    return metadata, f"Metadata (UTF-8): {metadata}"
+            except UnicodeDecodeError:
+                pass
+            return data.hex(), f"Metadata (hex): {data.hex()}"
+            
+        else:
+            # Generic length-delimited field
+            try:
+                text = data.decode('utf-8')
+                if text.isprintable():
+                    return text, f"Text data: {text}"
+            except UnicodeDecodeError:
+                pass
+            return data.hex(), f"Binary data (hex): {data.hex()}"
+    
+    def _parse_sensor_data(self, data: bytes) -> tuple:
+        """Parse sensor data from field 4 (repeated sensor readings)."""
+        try:
+            # Try to parse as nested protobuf structure
+            if len(data) >= 3:
+                # Check if it looks like nested protobuf
+                if data[0] in [0x08, 0x10, 0x18, 0x20]:  # Common protobuf field tags
+                    nested_data = self._parse_nested_protobuf(data)
+                    if nested_data:
+                        return nested_data, f"Sensor reading: {nested_data}"
+            
+            # Fallback to raw interpretation
+            if len(data) == 1:
+                return data[0], f"Single byte sensor value: {data[0]}"
+            elif len(data) == 2:
+                value = int.from_bytes(data, 'little')
+                return value, f"16-bit sensor value: {value}"
+            elif len(data) == 4:
+                value = int.from_bytes(data, 'little')
+                return value, f"32-bit sensor value: {value}"
+            else:
+                return data.hex(), f"Complex sensor data (hex): {data.hex()}"
+                
+        except Exception as e:
+            return data.hex(), f"Sensor data parsing failed (hex): {data.hex()}"
+    
+    def _parse_nested_protobuf(self, data: bytes) -> dict:
+        """Parse nested protobuf structure within sensor data."""
+        try:
+            nested_fields = {}
+            offset = 0
+            
+            while offset < len(data):
+                if offset >= len(data):
+                    break
+                    
+                tag = data[offset]
+                field_number = tag >> 3
+                wire_type = tag & 0x07
+                offset += 1
+                
+                if wire_type == 0:  # Varint
+                    value, bytes_consumed = self._read_varint(data, offset)
+                    offset += bytes_consumed
+                    
+                    # Interpret common sensor field numbers
+                    if field_number == 1:
+                        nested_fields["sensor_id"] = value
+                    elif field_number == 2:
+                        nested_fields["sensor_type"] = value
+                    elif field_number == 3:
+                        nested_fields["value"] = value
+                    elif field_number == 4:
+                        nested_fields["timestamp"] = value
+                    else:
+                        nested_fields[f"field_{field_number}"] = value
+                        
+                else:
+                    break  # Only handle varints in nested structure for now
+            
+            return nested_fields
+            
+        except Exception as e:
+            return None

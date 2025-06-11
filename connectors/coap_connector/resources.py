@@ -135,11 +135,11 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         self.request_count = 0
         logger.debug(f"Initialized DataRootResource.")
 
+    async def _process_request(self, request: aiocoap.Message, method: str) -> aiocoap.Message:
+        logger.info(f"Processing request: {request}")
+        return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED, payload=b"Direct root access not allowed")
+
     # async def render(self, request):
-    #      # Requests directly to the root (e.g., /data) are not allowed
-    #      logger.warning(f"Request received directly to data root path {request.opt.uri_path}. Method Not Allowed.")
-    #      return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED)
-    async def render(self, request):
         """Monitor all incoming requests and log details."""
         self.request_count += 1
         request_id = f"REQ-{self.request_count:04d}"
@@ -192,21 +192,21 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         #  'path' contains the remaining path segments.
         #  """
 
-        #  if len(path) == 1: # Expecting only one segment: the device ID
-        #      device_id_bytes = path[0]
-        #      try:
-        #          device_id = device_id_bytes.decode('utf-8')
-        #          logger.debug(f"Request for device sub-path '{device_id}'. Creating handler.")
-        #          # Return a *new instance* of the handler for this specific device ID
-        #          return DeviceDataHandlerResource(device_id, self.kafka_producer, self.command_consumer)
-        #      except UnicodeDecodeError:
-        #           logger.warning(f"Invalid UTF-8 in path element: {device_id_bytes!r}. Rejecting request.")
-        #           # Returning None results in 4.04 Not Found
-        #           return None
-        #      except Exception as e:
-        #          logger.exception(f"Error creating child resource for path element {device_id_bytes!r}: {e}")
-        #          return None
-        #  else:
-        #      # Path doesn't match /data/{device_id} structure
-        #      logger.warning(f"Request path structure not recognized: {path}")
-        #      return None # Results in 4.04 Not Found
+        if len(path) == 1: # Expecting only one segment: the device ID
+            device_id_bytes = path[0]
+            try:
+                device_id = device_id_bytes.decode('utf-8')
+                logger.debug(f"Request for device sub-path '{device_id}'. Creating handler.")
+                # Return a *new instance* of the handler for this specific device ID
+                return DeviceDataHandlerResource(device_id, self.kafka_producer, self.command_consumer)
+            except UnicodeDecodeError:
+                logger.warning(f"Invalid UTF-8 in path element: {device_id_bytes!r}. Rejecting request.")
+                # Returning None results in 4.04 Not Found
+                return None
+            except Exception as e:
+                logger.exception(f"Error creating child resource for path element {device_id_bytes!r}: {e}")
+                return None
+        else:
+            # Path doesn't match /data/{device_id} structure
+            logger.warning(f"Request path structure not recognized: {path}")
+            return None # Results in 4.04 Not Found

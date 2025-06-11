@@ -36,7 +36,7 @@ class CoapGatewayServer:
             
             # Create a root site and mount the data resource under the configured path
             root_site = resource.Site()
-            root_site.add_resource(['*'], data_root)
+            root_site.add_resource([], data_root)
             
             # The aiocoap server context needs the site root
             self.protocol = await aiocoap.Context.create_server_context(

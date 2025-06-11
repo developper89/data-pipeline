@@ -132,12 +132,62 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         super().__init__()
         self.kafka_producer = kafka_producer
         self.command_consumer = command_consumer
+        self.request_count = 0
         logger.debug(f"Initialized DataRootResource.")
 
     # async def render(self, request):
     #      # Requests directly to the root (e.g., /data) are not allowed
     #      logger.warning(f"Request received directly to data root path {request.opt.uri_path}. Method Not Allowed.")
     #      return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED)
+    async def render(self, request):
+        """Monitor all incoming requests and log details."""
+        self.request_count += 1
+        request_id = f"REQ-{self.request_count:04d}"
+        
+        # Extract request details
+        method = request.code.name if hasattr(request.code, 'name') else str(request.code)
+        source = request.remote.hostinfo if hasattr(request.remote, 'hostinfo') else str(request.remote)
+        payload_size = len(request.payload) if request.payload else 0
+        uri_path = list(request.opt.uri_path) if request.opt.uri_path else []
+        full_uri = request.get_request_uri() if hasattr(request, 'get_request_uri') else "unknown"
+        
+        # Log comprehensive request details
+        logger.info("=" * 80)
+        logger.info(f"🔍 INCOMING CoAP REQUEST [{request_id}]")
+        logger.info(f"  Method: {method}")
+        logger.info(f"  Source: {source}")
+        logger.info(f"  Full URI: {full_uri}")
+        logger.info(f"  Path Components: {uri_path}")
+        logger.info(f"  Payload Size: {payload_size} bytes")
+        
+        # Log CoAP options
+        if hasattr(request, 'opt'):
+            logger.info(f"  CoAP Options:")
+            for option_name in dir(request.opt):
+                if not option_name.startswith('_'):
+                    try:
+                        option_value = getattr(request.opt, option_name)
+                        if option_value is not None and option_value != []:
+                            logger.info(f"    {option_name}: {option_value}")
+                    except:
+                        pass
+        
+        # Log payload preview if present
+        if payload_size > 0:
+            payload_preview = request.payload[:50]  # First 50 bytes
+            logger.info(f"  Payload Preview (hex): {payload_preview.hex()}")
+            try:
+                payload_text = request.payload.decode('utf-8', errors='replace')[:100]
+                logger.info(f"  Payload Preview (text): {repr(payload_text)}")
+            except:
+                pass
+                
+        logger.info("=" * 80)
+        
+        # For now, just return Method Not Allowed for all direct requests
+        logger.warning(f"[{request_id}] Request received directly to root. Method Not Allowed.")
+        return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED, payload=b"Direct root access not allowed")
+
 
     def _find_child_and_pathstripped_message(self, request):
         #  """

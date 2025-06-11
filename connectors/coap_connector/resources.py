@@ -173,8 +173,7 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                         pass
         
         # Log payload preview if present
-        if payload_size > 0:
-            payload_preview = request.payload[:50]  # First 50 bytes
+        if payload_size > 0:# First 50 bytes
             logger.info(f"  Payload (hex): {request.payload.hex()}")
             try:
                 payload_text = request.payload.decode('utf-8', errors='replace')[:100]
@@ -192,54 +191,7 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         #  Dynamically create a handler for the device ID path segment.
         #  'path' contains the remaining path segments.
         #  """
-        """Override the original method to add our debug print statement.
-        
-        This method finds the child that will handle the request and strips
-        all path components that are covered by the child's position within
-        the site.
-        """
-        original_request_uri = getattr(
-            request,
-            "_original_request_uri",
-            request.get_request_uri(local_is_server=True),
-        )
-        
-        # Add comprehensive debug logging
-        logger.info(f"Request received - URI: {original_request_uri}")
-        logger.info(f"Path components: {request.opt.uri_path}")
-        
-        # Continue with the rest of the original method implementation
-        if request.opt.uri_path in self._resources:
-            logger.debug(f"Found exact resource match for path: {request.opt.uri_path}")
-            stripped = request.copy(uri_path=())
-            stripped._original_request_uri = original_request_uri
-            return self._resources[request.opt.uri_path], stripped
 
-        if not request.opt.uri_path:
-            logger.debug("No URI path components, resource not found")
-            raise KeyError()
-
-        remainder = [request.opt.uri_path[-1]]
-        path = request.opt.uri_path[:-1]
-        logger.debug(f"Looking for partial path match. Initial path: {path}, remainder: {remainder}")
-        
-        while path:
-            logger.debug(f"Checking path: {path}")
-            if path in self._subsites:
-                res = self._subsites[path]
-                logger.debug(f"Found matching subsite for path: {path}")
-                if remainder == [""]:
-                    # sub-sites should see their root resource like sites
-                    remainder = []
-                stripped = request.copy(uri_path=remainder)
-                stripped._original_request_uri = original_request_uri
-                logger.debug(f"Forwarding to subsite with remainder: {remainder}")
-                return res, stripped
-            remainder.insert(0, path[-1])
-            path = path[:-1]
-            
-        logger.debug(f"No matching resource found for path: {request.opt.uri_path}")
-        raise KeyError()
         #  if len(path) == 1: # Expecting only one segment: the device ID
         #      device_id_bytes = path[0]
         #      try:

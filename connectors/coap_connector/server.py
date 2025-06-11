@@ -35,12 +35,13 @@ class CoapGatewayServer:
             data_root = DataRootResource(self.kafka_producer, self.command_consumer)
             
             # Create a root site and mount the data resource under the configured path
-            root_site = resource.Site()
-            root_site.add_resource([], data_root)
+            # root_site = resource.Site()
+            # root_site.add_resource([], data_root)
+            # root_site.add_resource(['*'], data_root)
             
             # The aiocoap server context needs the site root
             self.protocol = await aiocoap.Context.create_server_context(
-                root_site,  # Pass DataRootResource as the site root
+                data_root,  # Pass DataRootResource as the site root
                 bind=(self.host, self.port)
             )
             from datetime import datetime

@@ -139,7 +139,7 @@ class DataRootResource(resource.Site): # Inherit from Site for automatic child h
     #      logger.warning(f"Request received directly to data root path {request.opt.uri_path}. Method Not Allowed.")
     #      return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED)
 
-    async def _find_child_and_pathstripped_message(self, request):
+    def _find_child_and_pathstripped_message(self, request):
         #  """
         #  Dynamically create a handler for the device ID path segment.
         #  'path' contains the remaining path segments.

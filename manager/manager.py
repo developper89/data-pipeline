@@ -114,6 +114,15 @@ def create_connector_container(client: docker.DockerClient, connector_config: di
         # Add PYTHONPATH to environment to allow finding the shared module
         environment["PYTHONPATH"] = "/app"
         
+        # Setup port mapping if EXPOSE_PORT is defined
+        ports = {}
+        expose_port = environment.get("EXPOSE_PORT")
+        if expose_port:
+            # Map container port to host port (same port number)
+            ports[f"{expose_port}/udp"] = expose_port  # Assuming UDP for CoAP, but could be TCP
+            ports[f"{expose_port}/tcp"] = expose_port  # Also expose TCP just in case
+            logger.info(f"Exposing port {expose_port} for container {container_name}")
+        
         logger.info(f"Creating container {container_name} from image {connector_config['image']}")
         
         container = client.containers.create(
@@ -123,7 +132,8 @@ def create_connector_container(client: docker.DockerClient, connector_config: di
             environment=environment,
             restart_policy={"Name": "on-failure", "MaximumRetryCount": MAX_RESTART_ATTEMPTS},
             network=NETWORK_NAME,
-            volumes=volumes
+            volumes=volumes,
+            ports=ports if ports else None
         )
         
         # Start the container

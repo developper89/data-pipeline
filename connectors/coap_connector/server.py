@@ -5,10 +5,10 @@ import asyncio
 import aiocoap
 import aiocoap.resource as resource
 
-from .resources import DataRootResource
-from .kafka_producer import KafkaMsgProducer # Import Kafka producer wrapper
-from .command_consumer import CommandConsumer
-from . import config
+from resources import DataRootResource
+from kafka_producer import KafkaMsgProducer # Import Kafka producer wrapper
+from command_consumer import CommandConsumer
+import config
 
 logger = logging.getLogger(__name__)
 

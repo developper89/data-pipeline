@@ -10,7 +10,7 @@ from shared.mq.kafka_helpers import publish_message # Use the generic helper
 from shared.models.common import RawMessage, ErrorMessage
 
 # Import local config
-from . import config
+import config
 
 logger = logging.getLogger(__name__)
 

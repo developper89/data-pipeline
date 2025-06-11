@@ -7,17 +7,18 @@ from typing import Optional # For sys.exit
 
 # Shared helpers and local components
 from shared.mq.kafka_helpers import create_kafka_producer # For initialization
-from . import config
-from .kafka_producer import KafkaMsgProducer # The wrapper
-from .server import CoapGatewayServer
+import config
+from kafka_producer import KafkaMsgProducer # The wrapper
+from server import CoapGatewayServer
 
 # Configure logging
 logging.basicConfig(
     level=config.LOG_LEVEL,
-    format='%(asctime)s - %(name)s - %(levelname)s - [%(request_id)s] %(message)s' # Optional request_id placeholder
+    # level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
-logging.getLogger("aiocoap").setLevel(logging.INFO) # aiocoap can be verbose
-logging.getLogger("kafka").setLevel(logging.WARNING)
+# logging.getLogger("aiocoap").setLevel(config.LOG_LEVEL) # aiocoap can be verbose
+# logging.getLogger("kafka").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
 

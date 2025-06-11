@@ -9,20 +9,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Create data directory
-RUN mkdir -p /app/data
-
-# Copy requirements file
+# Copy requirements first to leverage Docker cache
 COPY connectors/coap_connector/requirements.txt .
-
-# Install Python dependencies
 RUN uv pip install --system --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy the connector scripts
 COPY connectors/coap_connector/ /app/coap_connector/
+
+# Set working directory
+WORKDIR /app
+
+# The entrypoint script that will run the specified connector
+COPY connectors/coap_connector/entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
 
 # Expose the CoAP port
 EXPOSE 5683/udp
 
-# Run the application
-CMD ["python", "main.py"] 
+ENTRYPOINT ["/app/entrypoint.sh"] 

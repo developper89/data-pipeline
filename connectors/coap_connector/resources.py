@@ -10,8 +10,8 @@ import aiocoap.resource as resource
 from kafka.errors import KafkaError
 
 from shared.models.common import RawMessage # Import shared model
-from .kafka_producer import KafkaMsgProducer # Import the Kafka producer wrapper
-from .command_consumer import CommandConsumer
+from kafka_producer import KafkaMsgProducer # Import the Kafka producer wrapper
+from command_consumer import CommandConsumer
 
 logger = logging.getLogger(__name__)
 

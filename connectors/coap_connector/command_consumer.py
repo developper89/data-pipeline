@@ -9,7 +9,7 @@ from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 
 from shared.mq.kafka_helpers import create_kafka_consumer
-from . import config
+import config
 
 logger = logging.getLogger(__name__)
 

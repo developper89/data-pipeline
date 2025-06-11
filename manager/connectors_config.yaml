@@ -15,14 +15,15 @@ connectors:
   - connector_id: "coap_preservarium"
     image: "coap-connector:latest"
     env:
-      COAP_HOST: "::"
+      COAP_HOST: "0.0.0.0"
       COAP_PORT: "5683"
+      EXPOSE_PORT: "5683"
       KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
       KAFKA_RAW_DATA_TOPIC: "iot_raw_data"
       KAFKA_ERROR_TOPIC: "iot_errors"
       KAFKA_DEVICE_COMMANDS_TOPIC: "device_commands"
       COAP_BASE_DATA_PATH: "data"
-      LOG_LEVEL: "INFO"
+      LOG_LEVEL: "DEBUG"
 
   # - connector_id: "broker_preservarium"
   #   image: "mqtt-connector:latest"

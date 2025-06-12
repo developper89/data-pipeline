@@ -24,7 +24,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class CoAPMessage:
-    """Simple CoAP message parser."""
+    """Simple CoAP message parser according to RFC 7252."""
     
     def __init__(self, data: bytes):
         self.raw_data = data
@@ -34,7 +34,6 @@ class CoAPMessage:
         self.code = None
         self.message_id = None
         self.token = None
-        self.options = []
         self.payload = b''
         self.parse_error = None
         
@@ -44,7 +43,7 @@ class CoAPMessage:
             self.parse_error = str(e)
     
     def _parse_message(self):
-        """Parse CoAP message according to RFC 7252."""
+        """Parse CoAP message structure."""
         if len(self.raw_data) < 4:
             raise ValueError("Message too short for CoAP header")
         
@@ -65,39 +64,13 @@ class CoAPMessage:
                 self.token = self.raw_data[offset:offset + self.token_length]
                 offset += self.token_length
         
-        # Parse options and find payload
-        while offset < len(self.raw_data):
-            if self.raw_data[offset] == 0xFF:  # Payload marker
-                offset += 1
-                self.payload = self.raw_data[offset:]
-                break
-            
-            # Simple option parsing (skip for now)
-            try:
-                option_delta = (self.raw_data[offset] >> 4) & 0x0F
-                option_length = self.raw_data[offset] & 0x0F
-                offset += 1
-                
-                # Handle extended lengths
-                if option_delta == 13:
-                    offset += 1
-                elif option_delta == 14:
-                    offset += 2
-                elif option_delta == 15:
-                    break  # Invalid
-                
-                if option_length == 13:
-                    offset += 1
-                elif option_length == 14:
-                    offset += 2
-                elif option_length == 15:
-                    break  # Invalid
-                
-                # Skip option value
-                offset += option_length
-                
-            except IndexError:
-                break
+        # Find payload marker (0xFF) or assume remaining is payload
+        payload_marker = self.raw_data.find(b'\xFF', offset)
+        if payload_marker != -1:
+            self.payload = self.raw_data[payload_marker + 1:]
+        elif offset < len(self.raw_data):
+            # No payload marker found, remaining data might be payload
+            self.payload = self.raw_data[offset:]
     
     def get_code_string(self) -> str:
         """Convert CoAP code to human-readable string."""
@@ -136,11 +109,11 @@ class ProtoMeasurementsParser:
         }
     
     def parse_protobuf_payload(self, payload: bytes) -> Dict[str, Any]:
-        """Parse ProtoMeasurements from payload."""
+        """Parse ProtoMeasurements from binary payload."""
         if not payload or len(payload) < 2:
             return {'error': 'Payload too short or empty'}
         
-        # Check if it looks like protobuf (starts with field 1)
+        # Check if it looks like protobuf (starts with field 1 tag 0x0a)
         if payload[0] != 0x0a:
             return {'error': 'Not a ProtoMeasurements payload (missing field 1)'}
         
@@ -165,7 +138,7 @@ class ProtoMeasurementsParser:
                 
                 result['parsed_fields'].append(field_number)
                 
-                if field_number == 1 and wire_type == 2:  # serial_num
+                if field_number == 1 and wire_type == 2:  # serial_num (bytes)
                     length = payload[offset]
                     offset += 1
                     if offset + length <= len(payload):
@@ -173,21 +146,21 @@ class ProtoMeasurementsParser:
                         result['device_id'] = serial_data.hex()
                         offset += length
                 
-                elif field_number == 2 and wire_type == 0:  # battery_status
+                elif field_number == 2 and wire_type == 0:  # battery_status (bool)
                     value, consumed = self._read_varint(payload, offset)
                     result['battery_status'] = bool(value)
                     offset += consumed
                 
-                elif field_number == 3 and wire_type == 0:  # measurement_period_base
+                elif field_number == 3 and wire_type == 0:  # measurement_period_base (uint32)
                     value, consumed = self._read_varint(payload, offset)
                     result['measurement_period'] = value
                     offset += consumed
                 
-                elif field_number == 4 and wire_type == 2:  # channels
+                elif field_number == 4 and wire_type == 2:  # channels (repeated ProtoChannel)
                     channel, offset = self._parse_channel(payload, offset)
                     result['channels'].append(channel)
                 
-                elif field_number == 16 and wire_type == 2:  # cloud_token
+                elif field_number == 16 and wire_type == 2:  # cloud_token (string)
                     length = payload[offset]
                     offset += 1
                     if length > 0 and offset + length <= len(payload):
@@ -235,23 +208,23 @@ class ProtoMeasurementsParser:
             wire_type = tag & 0x07
             data_offset += 1
             
-            if field_number == 1 and wire_type == 0:  # type
+            if field_number == 1 and wire_type == 0:  # type (MeasurementType enum)
                 value, consumed = self._read_varint(channel_data, data_offset)
                 channel['type'] = value
                 channel['type_name'] = self.measurement_types.get(value, f'Unknown({value})')
                 data_offset += consumed
             
-            elif field_number == 2 and wire_type == 0:  # timestamp
+            elif field_number == 2 and wire_type == 0:  # timestamp (int32)
                 value, consumed = self._read_varint(channel_data, data_offset)
                 channel['timestamp'] = value
                 data_offset += consumed
             
-            elif field_number == 4 and wire_type == 0:  # start_point
+            elif field_number == 4 and wire_type == 0:  # start_point (sint32)
                 value, consumed = self._read_varint(channel_data, data_offset)
                 channel['start_point'] = self._decode_zigzag(value)
                 data_offset += consumed
             
-            elif field_number == 5 and wire_type == 2:  # sample_offsets
+            elif field_number == 5 and wire_type == 2:  # sample_offsets (repeated sint32)
                 if data_offset < len(channel_data):
                     offsets_length = channel_data[data_offset]
                     data_offset += 1
@@ -384,7 +357,6 @@ class CoAPPayloadMonitor:
                             save_to_file: bool, output_file: str):
         """Process a single CoAP message."""
         
-        # Basic CoAP info
         timestamp = datetime.utcnow().isoformat()
         source_ip, source_port = addr
         
@@ -435,10 +407,9 @@ class CoAPPayloadMonitor:
             if timestamp:
                 dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
                 print(f"         Time: {dt.isoformat()}")
-            print(f"         Samples: {sample_count}")
-            
-            if channel.get('sample_offsets'):
-                print(f"         Data: {channel['sample_offsets'][:5]}...")  # Show first 5
+            if sample_count > 0:
+                print(f"         Samples: {sample_count}")
+                print(f"         Data: {channel['sample_offsets'][:5]}{'...' if sample_count > 5 else ''}")
     
     def _display_stats(self):
         """Display monitoring statistics."""
@@ -478,11 +449,10 @@ class CoAPPayloadMonitor:
             logger.error(f"Failed to save to file: {e}")
     
     def _cleanup(self):
-        """Clean up resources."""
+        """Clean up resources and display final stats."""
         if self.socket:
             self.socket.close()
         
-        # Display final stats
         print("\n" + "=" * 80)
         print("📊 MONITORING SESSION COMPLETE")
         print("=" * 80)
@@ -505,16 +475,27 @@ class CoAPPayloadMonitor:
 
 
 def main():
-    """Main entry point."""
-    parser = argparse.ArgumentParser(description='Monitor CoAP UDP traffic and parse protobuf payloads')
+    """Main entry point with command line argument parsing."""
+    parser = argparse.ArgumentParser(
+        description='Monitor CoAP UDP traffic and parse protobuf payloads',
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  %(prog)s                          # Monitor on default port 5683
+  %(prog)s -p 8080                  # Monitor on port 8080
+  %(prog)s -s                       # Save captured data to JSON file
+  %(prog)s -s -o my_capture.json    # Save to specific file
+  %(prog)s -v                       # Enable verbose logging
+        """
+    )
     parser.add_argument('-p', '--port', type=int, default=5683, 
                        help='UDP port to monitor (default: 5683)')
     parser.add_argument('-i', '--interface', default='0.0.0.0',
-                       help='Interface to bind to (default: 0.0.0.0)')
+                       help='Interface to bind to (default: 0.0.0.0 - all interfaces)')
     parser.add_argument('-s', '--save', action='store_true',
                        help='Save captured data to JSON file')
     parser.add_argument('-o', '--output', type=str,
-                       help='Output file name (default: auto-generated)')
+                       help='Output file name (default: auto-generated timestamp)')
     parser.add_argument('-v', '--verbose', action='store_true',
                        help='Enable verbose logging')
     
@@ -523,9 +504,14 @@ def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    # Create and start monitor
-    monitor = CoAPPayloadMonitor(port=args.port, interface=args.interface)
-    monitor.start_monitoring(save_to_file=args.save, output_file=args.output)
+    try:
+        # Create and start monitor
+        monitor = CoAPPayloadMonitor(port=args.port, interface=args.interface)
+        monitor.start_monitoring(save_to_file=args.save, output_file=args.output)
+    except KeyboardInterrupt:
+        print("\n⚡ Monitoring stopped by user")
+    except Exception as e:
+        logger.error(f"Monitoring failed: {e}")
 
 
 if __name__ == '__main__':

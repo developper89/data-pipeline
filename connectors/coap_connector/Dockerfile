@@ -23,7 +23,4 @@ WORKDIR /app
 COPY connectors/coap_connector/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
-# Expose the CoAP port
-EXPOSE 5683/udp
-
 ENTRYPOINT ["/app/entrypoint.sh"] 

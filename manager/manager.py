@@ -126,11 +126,20 @@ def create_connector_container(client: docker.DockerClient, connector_config: di
                 expose_ports = [str(port) for port in expose_ports]
             
             exposed_ports_list = []
-            for port in expose_ports:
-                # Map container port to host port (same port number)
-                ports[f"{port}/udp"] = port  # UDP mapping
-                ports[f"{port}/tcp"] = port  # TCP mapping
-                exposed_ports_list.append(port)
+            for port_spec in expose_ports:
+                # Parse port specification (e.g., "8456/udp", "8080/tcp", or just "8080")
+                if '/' in port_spec:
+                    port, protocol = port_spec.rsplit('/', 1)
+                    # Map container port to host port (same port number) with specified protocol
+                    ports[f"{port}/{protocol}"] = port
+                    exposed_ports_list.append(port_spec)
+                else:
+                    # If no protocol specified, default to both UDP and TCP (backwards compatibility)
+                    port = port_spec
+                    ports[f"{port}/udp"] = port  # UDP mapping
+                    ports[f"{port}/tcp"] = port  # TCP mapping
+                    exposed_ports_list.append(f"{port}/udp")
+                    exposed_ports_list.append(f"{port}/tcp")
             
             logger.info(f"Exposing ports {', '.join(exposed_ports_list)} for container {container_name}")
         

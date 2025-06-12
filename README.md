@@ -458,3 +458,235 @@ uvicorn pusher_api.main:create_app --factory --reload
 ## License
 
 This project is part of the Preservarium IoT data pipeline system.
+
+# ProtoMeasurements Parser
+
+A comprehensive Python parser for IoT sensor measurement data from CoAP payloads using the ProtoMeasurements protobuf schema.
+
+## Overview
+
+This parser extracts complete IoT sensor data from binary protobuf payloads, including:
+
+- Device identification and battery status
+- Measurement periods and timestamps
+- Multiple sensor channels (Temperature, Humidity, Light, etc.)
+- Error handling and sensor failure detection
+- Human-readable output with proper unit conversions
+
+## Files
+
+- `protobuf_parser.py` - Main parser implementation
+- `parse_custom_payload.py` - Example usage with custom payloads
+- `docs/protobuf-measurements-parsing.md` - Comprehensive documentation
+- `docs/proto_measurements.proto` - Protobuf schema definition
+
+## Quick Start
+
+### Basic Usage
+
+```python
+from protobuf_parser import ProtoMeasurementsParser
+
+# Your payload as hex string
+payload_hex = "0a06282c02424eed1001183c220f080110b8d0a7c20620d2032a020000..."
+payload_bytes = bytes.fromhex(payload_hex)
+
+# Parse the payload
+parser = ProtoMeasurementsParser()
+result = parser.parse_complete_message(payload_bytes)
+
+# Print human-readable results
+parser.print_parsed_data(result)
+```
+
+### Command Line Usage
+
+Run the parser with the example payload:
+
+```bash
+python protobuf_parser.py
+```
+
+Parse your own payload:
+
+```bash
+python parse_custom_payload.py
+```
+
+## Features
+
+### Supported Fields
+
+- **Device Serial Number** - Unique device identifier
+- **Battery Status** - Battery health (OK/LOW)
+- **Measurement Periods** - Base period and factor calculations
+- **Sensor Channels** - Multiple sensor types with measurements
+- **Timestamps** - Unix timestamps with ISO 8601 conversion
+- **Transfer Reasons** - Bit-flag decoded transmission reasons
+- **Configuration Hash** - Device configuration tracking
+- **Cloud Token** - Optional cloud service integration
+
+### Supported Sensor Types
+
+| Type | Name          | Unit  | Precision |
+| ---- | ------------- | ----- | --------- |
+| 1    | Temperature   | °C    | 0.1°C     |
+| 2    | Humidity      | %RH   | 0.1%      |
+| 3    | Light         | lux   | 1 lux     |
+| 4    | Accelerometer | m/s²  | -         |
+| 5    | Digital Input | state | Binary    |
+| 6    | Pressure      | hPa   | 0.1 hPa   |
+| 7    | CO2           | ppm   | 1 ppm     |
+| 8    | Voltage       | mV    | 1 mV      |
+| 9    | Current       | mA    | 1 mA      |
+| 10   | Power         | mW    | 1 mW      |
+
+### Error Handling
+
+The parser automatically detects and handles:
+
+- Sensor error codes (8355840-8388607 range)
+- Malformed payloads
+- Missing or invalid fields
+- Timestamp validation
+- Unknown sensor types
+
+## Sample Output
+
+```
+============================================================
+PROTOBUF MEASUREMENTS PARSER RESULTS
+============================================================
+📱 Device ID: 282c02424eed
+🔋 Battery Status: OK
+⏱️  Measurement Period: 60s (base) × 1 (factor) = 60s
+📊 Active Channels: 2
+🔧 Config Hash: 9
+📡 Next Transmission: 2025-06-11T20:44:06+00:00
+🕒 Parsed at: 2025-06-12T11:55:38+00:00
+📏 Payload size: 58 bytes
+
+============================================================
+SENSOR CHANNELS
+============================================================
+
+📡 Channel 1: Temperature (Type 1)
+   🕐 Base Timestamp: 2025-06-11T20:34:00+00:00
+   🎯 Start Point: 233
+   📈 Sample Count: 2
+   📊 Measurements:
+      1. 23.3°C at 2025-06-11T20:34:00+00:00
+      2. 23.3°C at 2025-06-11T20:35:00+00:00
+
+📡 Channel 2: Humidity (Type 2)
+   🕐 Base Timestamp: 2025-06-11T20:34:00+00:00
+   🎯 Start Point: 57
+   📈 Sample Count: 2
+   📊 Measurements:
+      1. 5.7%RH at 2025-06-11T20:34:00+00:00
+      2. 5.7%RH at 2025-06-11T20:35:00+00:00
+```
+
+## Programmatic Access
+
+The parser returns a comprehensive dictionary with all parsed data:
+
+```python
+result = parser.parse_complete_message(payload_bytes)
+
+# Access parsed data
+device_id = result['device_id']
+battery_ok = result['battery_ok']
+channels = result['channels']
+
+# Access measurements
+for channel in channels:
+    sensor_type = channel['type_name']
+    measurements = channel['measurements']
+
+    for measurement in measurements:
+        if measurement['status'] == 'ok':
+            value = measurement['value']
+            unit = measurement['unit']
+            timestamp = measurement['timestamp_iso']
+            print(f"{sensor_type}: {value}{unit} at {timestamp}")
+```
+
+## JSON Export
+
+The parser can export results to JSON:
+
+```python
+import json
+
+result = parser.parse_complete_message(payload_bytes)
+
+# Save to JSON file
+with open('parsed_result.json', 'w') as f:
+    json.dump(result, f, indent=2, default=str)
+```
+
+## Advanced Usage
+
+### Binary Sensor Processing
+
+For binary sensors (like Digital Input), the parser handles state changes:
+
+```python
+# Binary sensor offsets represent state changes over time
+# Positive values = HIGH state, Negative values = LOW state
+# Absolute value = time offset from base timestamp
+```
+
+### Error Code Handling
+
+The parser automatically detects sensor errors:
+
+```python
+for measurement in measurements:
+    if measurement['status'] == 'sensor_error':
+        error_code = measurement['error_code']
+        description = measurement['error_description']
+        print(f"Sensor Error {error_code}: {description}")
+```
+
+### Transfer Reason Decoding
+
+The parser decodes transfer reason bit flags:
+
+```python
+if result['transfer_reason_decoded']:
+    reason = result['transfer_reason_decoded']
+
+    if reason['first_message_after_reset']:
+        print("Device restarted")
+
+    if reason['user_button_triggered']:
+        print("Manual transmission triggered")
+
+    retry_count = reason['retry_count']
+    triggered_rules = reason['triggered_rules']
+```
+
+## Requirements
+
+- Python 3.7+
+- No external dependencies (uses only standard library)
+
+## Schema Reference
+
+Based on the ProtoMeasurements protobuf schema:
+
+- Field 1: `bytes serial_num` - Device serial number
+- Field 2: `bool battery_status` - Battery health indicator
+- Field 3: `uint32 measurement_period_base` - Base measurement interval
+- Field 4: `repeated ProtoChannel channels` - Sensor channels
+- Field 5: `uint32 next_transmission_at` - Next transmission timestamp
+- Field 6: `uint32 transfer_reason` - Transmission reason flags
+- Field 8: `uint32 measurement_period_factor` - Period multiplier
+- Field 9: `uint32 hash` - Configuration hash
+- Field 16: `string cloud_token` - Cloud service token
+
+## License
+
+This parser is based on the ProtoMeasurements schema documentation and protobuf definition provided.

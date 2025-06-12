@@ -16,8 +16,8 @@ connectors:
     image: "coap-connector:latest"
     env:
       COAP_HOST: "0.0.0.0"
-      COAP_PORT: "5683"
-      EXPOSE_PORT: ["5683", "50000"]
+      COAP_PORT: "8456"
+      EXPOSE_PORT: ["8456"]
       KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"
       KAFKA_RAW_DATA_TOPIC: "iot_raw_data"
       KAFKA_ERROR_TOPIC: "iot_errors"

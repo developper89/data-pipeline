@@ -7,6 +7,13 @@ the system works correctly before using it in the translation layer.
 """
 import sys
 import os
+import logging
+
+# Configure logging to show debug information
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
+)
 
 # Add the app directory to the path
 sys.path.insert(0, '/app')

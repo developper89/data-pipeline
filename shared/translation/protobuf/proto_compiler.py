@@ -91,23 +91,56 @@ class ProtobufCompiler:
         # Find all compiled _pb2.py files
         pb2_files = list(Path(self._temp_dir).glob("*_pb2.py"))
         
+        # First pass: Create module specs for all files
+        module_specs = {}
         for pb2_file in pb2_files:
             module_name = pb2_file.stem  # Remove .py extension
-            
+            spec = importlib.util.spec_from_file_location(module_name, pb2_file)
+            module_specs[module_name] = (spec, pb2_file)
+        
+        # Second pass: Load all modules and add to sys.modules first
+        for module_name, (spec, pb2_file) in module_specs.items():
             try:
-                # Load module dynamically
-                spec = importlib.util.spec_from_file_location(module_name, pb2_file)
                 module = importlib.util.module_from_spec(spec)
-                
-                # Add to sys.modules to handle cross-references
+                # Add to sys.modules BEFORE executing to handle circular imports
                 sys.modules[module_name] = module
-                spec.loader.exec_module(module)
-                
-                self.compiled_modules[module_name] = module
-                logger.debug(f"Loaded compiled module: {module_name}")
-                
+                logger.debug(f"Pre-registered module in sys.modules: {module_name}")
             except Exception as e:
-                logger.warning(f"Failed to load compiled module {module_name}: {e}")
+                logger.warning(f"Failed to create module spec for {module_name}: {e}")
+        
+        # Third pass: Execute all modules now that they're all registered
+        for module_name, (spec, pb2_file) in module_specs.items():
+            try:
+                if module_name in sys.modules:
+                    module = sys.modules[module_name]
+                    spec.loader.exec_module(module)
+                    self.compiled_modules[module_name] = module
+                    logger.debug(f"Successfully executed and loaded module: {module_name}")
+                else:
+                    logger.warning(f"Module {module_name} not found in sys.modules during execution")
+                    
+            except Exception as e:
+                logger.warning(f"Failed to execute module {module_name}: {e}")
+                
+                # If it's an import error, show more details
+                if isinstance(e, (ImportError, ModuleNotFoundError)):
+                    logger.debug(f"Import error details for {module_name}:")
+                    logger.debug(f"  Available modules in sys.modules: {list(sys.modules.keys())}")
+                    logger.debug(f"  Compiled modules so far: {list(self.compiled_modules.keys())}")
+                    
+                    # Try to show the problematic import line
+                    try:
+                        with open(pb2_file, 'r') as f:
+                            lines = f.readlines()
+                            for i, line in enumerate(lines[:20]):  # Check first 20 lines
+                                if 'import' in line and '_pb2' in line:
+                                    logger.debug(f"  Line {i+1}: {line.strip()}")
+                    except Exception:
+                        pass
+                
+                # Remove from sys.modules if execution failed
+                if module_name in sys.modules:
+                    del sys.modules[module_name]
     
     def get_proto_class(self, module_name: str, class_name: str) -> Optional[type]:
         """
@@ -133,7 +166,17 @@ class ProtobufCompiler:
         return getattr(module, class_name)
     
     def cleanup(self):
-        """Clean up temporary files."""
+        """Clean up temporary files and remove modules from sys.modules."""
+        # Remove compiled modules from sys.modules
+        for module_name in list(self.compiled_modules.keys()):
+            if module_name in sys.modules:
+                del sys.modules[module_name]
+                logger.debug(f"Removed module from sys.modules: {module_name}")
+        
+        # Clear our compiled modules dict
+        self.compiled_modules.clear()
+        
+        # Remove temporary directory
         if self._temp_dir and os.path.exists(self._temp_dir):
             import shutil
             try:
@@ -141,6 +184,8 @@ class ProtobufCompiler:
                 logger.debug(f"Cleaned up temporary directory: {self._temp_dir}")
             except Exception as e:
                 logger.warning(f"Failed to cleanup temporary directory: {e}")
+            finally:
+                self._temp_dir = None
     
     def __del__(self):
         """Cleanup on object destruction."""

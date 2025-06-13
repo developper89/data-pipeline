@@ -5,16 +5,8 @@ from .proto_loader import ProtoModuleLoader
 logging.basicConfig(
     format= '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
 )
-# Configure logger with file and line number
-# logger = logging.getLogger(__name__)
-# if not logger.handlers:
-#     handler = logging.StreamHandler()
-#     formatter = logging.Formatter(
-#         '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
-#     )
-#     handler.setFormatter(formatter)
-#     logger.addHandler(handler)
-#     logger.setLevel(logging.DEBUG)
+
+logger = logging.getLogger(__name__)
 
 class ProtobufMessageParser:
     """Generic protobuf message parser that works with any manufacturer's schemas."""
@@ -27,6 +19,13 @@ class ProtobufMessageParser:
     def _load_proto_modules(self):
         """Load compiled protobuf modules for this manufacturer."""
         self.proto_modules = {}
+        
+        # Check if protobuf is available
+        try:
+            import google.protobuf
+        except ImportError:
+            logger.error("protobuf package not installed. Run: pip install protobuf>=4.21.0")
+            return
 
         for message_type, config in self.message_types.items():
             try:

@@ -1,6 +1,5 @@
 # coap_gateway/resources.py
 import logging
-import base64
 import json
 import os
 from datetime import datetime, timezone
@@ -132,9 +131,9 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                 raw_message = RawMessage(
                     device_id=translation_result.device_id,
                     timestamp=datetime.now(timezone.utc),
-                    payload=base64.b64encode(request.payload).decode('utf-8'),
+                    payload_hex=request.payload.hex(),
+                    protocol="coap",
                     metadata={
-                        "protocol": "coap",
                         "source": source,
                         "method": method,
                         "uri_path": uri_path,

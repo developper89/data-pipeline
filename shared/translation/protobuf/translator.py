@@ -44,7 +44,7 @@ class ProtobufTranslator(BaseTranslator):
             message_type, parsed_message = self.message_parser.parse_message(
                 raw_data.payload_bytes
             )
-
+            logger.info(f"Parsed message: {parsed_message}")
             # Extract device ID using configured field mappings
             device_id = self.device_id_extractor.extract(message_type, parsed_message)
 

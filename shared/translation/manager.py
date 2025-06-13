@@ -23,9 +23,9 @@ class TranslationManager:
         """
         for translator in self.translators:
             try:
-                if translator.can_handle(raw_data):
-                    logger.debug(f"Using translator: {translator.__class__.__name__}")
-                    return translator.extract_device_id(raw_data)
+                # if translator.can_handle(raw_data):
+                logger.debug(f"Using translator: {translator.__class__.__name__}")
+                return translator.extract_device_id(raw_data)
             except Exception as e:
                 logger.warning(f"Translator {translator.__class__.__name__} failed: {e}")
                 continue

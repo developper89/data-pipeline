@@ -69,24 +69,43 @@ class ProtobufMessageParser:
 
     def detect_message_type(self, payload: bytes) -> Optional[str]:
         """Detect the type of protobuf message."""
+        logger.debug(f"Detecting message type for payload of {len(payload)} bytes")
+        
         for message_type, proto_info in self.proto_modules.items():
-            if self._try_parse_message(payload, proto_info):
+            logger.debug(f"Trying to parse as {message_type}...")
+            if self._try_parse_message(payload, proto_info, message_type):
+                logger.info(f"Successfully detected message type: {message_type}")
                 return message_type
+            else:
+                logger.debug(f"Failed to parse as {message_type}")
+                
+        logger.warning(f"Could not detect message type for payload. Available types: {list(self.proto_modules.keys())}")
         return None
 
     def parse_message(self, payload: bytes) -> Tuple[str, Any]:
         """Parse protobuf message and return type and parsed object."""
+        logger.debug(f"Parsing protobuf message of {len(payload)} bytes")
+        
         message_type = self.detect_message_type(payload)
 
         if message_type and message_type in self.proto_modules:
             proto_info = self.proto_modules[message_type]
             message = proto_info['class']()
             message.ParseFromString(payload)
+            logger.info(f"Successfully parsed {message_type} message")
+            
+            # Log available fields for debugging
+            if hasattr(message, 'DESCRIPTOR'):
+                available_fields = [field.name for field in message.DESCRIPTOR.fields]
+                logger.debug(f"Parsed {message_type} has fields: {available_fields}")
+            
             return message_type, message
         else:
+            available_types = list(self.proto_modules.keys())
+            logger.error(f"Unknown {self.manufacturer} message type. Available types: {available_types}")
             raise ValueError(f"Unknown {self.manufacturer} message type")
 
-    def _try_parse_message(self, payload: bytes, proto_info: Dict) -> bool:
+    def _try_parse_message(self, payload: bytes, proto_info: Dict, message_type: str = "") -> bool:
         """Try to parse payload as specific message type."""
         try:
             message = proto_info['class']()
@@ -94,12 +113,27 @@ class ProtobufMessageParser:
 
             # Validate required fields exist
             required_fields = proto_info.get('required_fields', [])
+            if required_fields:
+                logger.debug(f"Checking required fields for {message_type}: {required_fields}")
+                
             for field in required_fields:
                 if not hasattr(message, field):
+                    logger.debug(f"Required field '{field}' not found in {message_type}")
                     return False
+                
+                # Check if field has a value (protobuf fields can exist but be empty)
+                field_value = getattr(message, field)
+                if field_value is None or (isinstance(field_value, (str, bytes)) and not field_value):
+                    logger.debug(f"Required field '{field}' is empty in {message_type}")
+                    return False
+                    
+                logger.debug(f"Required field '{field}' found with value in {message_type}")
 
+            logger.debug(f"Successfully parsed and validated {message_type}")
             return True
-        except Exception:
+            
+        except Exception as e:
+            logger.debug(f"Failed to parse as {message_type}: {e}")
             return False
     
     def cleanup(self):

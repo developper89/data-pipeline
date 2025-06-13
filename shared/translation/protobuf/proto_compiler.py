@@ -144,14 +144,14 @@ class ProtobufCompiler:
     
     def cleanup(self):
         """Remove protobuf directory from Python path if we added it."""
-        if self._path_added:
+        if self._path_added and sys is not None:
             protobuf_path = str(self.proto_output_dir)
             try:
                 sys.path.remove(protobuf_path)
                 self._path_added = False
                 logger.debug(f"Removed {protobuf_path} from Python path")
-            except ValueError:
-                # Path wasn't in sys.path
+            except (ValueError, AttributeError):
+                # Path wasn't in sys.path or sys is None during shutdown
                 pass
     
     def __del__(self):

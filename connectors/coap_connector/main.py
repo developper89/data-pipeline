@@ -13,8 +13,8 @@ from server import CoapGatewayServer
 
 # Configure logging
 logging.basicConfig(
-    level=config.LOG_LEVEL,
-    # level=logging.INFO,
+    # level=config.LOG_LEVEL,
+    level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 # logging.getLogger("aiocoap").setLevel(config.LOG_LEVEL) # aiocoap can be verbose

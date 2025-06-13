@@ -14,7 +14,7 @@ from kafka_producer import KafkaMsgProducer # Import the Kafka producer wrapper
 from command_consumer import CommandConsumer
 
 logger = logging.getLogger(__name__)
-
+logger.setLevel(logging.DEBUG)
 class DataRootResource(resource.Resource): # Inherit from Site for automatic child handling
     """
     Acts as a factory for DeviceDataHandlerResource based on path.

@@ -13,13 +13,13 @@ from server import CoapGatewayServer
 
 # Configure logging
 # logging.basicConfig(level=logging.DEBUG)
-logging.basicConfig(
-        level=logging.DEBUG,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
+# logging.basicConfig(
+#         level=logging.DEBUG,
+#         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+#         handlers=[
+#             logging.StreamHandler(sys.stdout)
+#         ]
+#     )
 # logging.basicConfig(
 #     # level=config.LOG_LEVEL,
 #     level=logging.DEBUG,
@@ -30,6 +30,7 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+logger.setLevel(logging.DEBUG)
 # Global references for cleanup
 kafka_producer_wrapper: Optional[KafkaMsgProducer] = None
 server_instance: Optional[CoapGatewayServer] = None

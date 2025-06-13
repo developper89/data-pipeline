@@ -8,7 +8,7 @@ import aiocoap.resource as resource
 from shared.models.common import RawMessage # Import shared model
 from shared.models.translation import RawData, TranslationResult
 from shared.translation.manager import TranslationManager
-from shared.translation.protobuf.translator import ProtobufTranslator
+from shared.translation.factory import create_translator
 from shared.config_loader import get_translator_configs, validate_translator_config
 from kafka_producer import KafkaMsgProducer # Import the Kafka producer wrapper
 from command_consumer import CommandConsumer
@@ -56,13 +56,13 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                 config = translator_config.get('config', {})
                 priority = translator_config.get('priority', 999)
                 
-                if translator_type == 'protobuf':
-                    # Create Efento protobuf translator
-                    translator = ProtobufTranslator(config=config)
+                # Use factory to create translator
+                translator = create_translator(translator_type, config)
+                if translator:
                     translators.append(translator)
                     logger.info(f"Created {translator_type} translator with priority {priority}")
                 else:
-                    logger.warning(f"Unknown translator type: {translator_type}")
+                    logger.warning(f"Failed to create translator of type: {translator_type}")
             
             translation_manager = TranslationManager(translators)
             if translators:

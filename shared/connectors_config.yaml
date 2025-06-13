@@ -60,22 +60,25 @@ connectors:
   - connector_id: "mqtt_preservarium"
     image: "mqtt-connector:latest"
     translators:
-      - type: "mqtt_topic_pattern"
+      - type: "pattern"
         config:
-          pattern: "broker_data/{device_id}/data"
-          validation:
-            device_id_regex: "^[a-zA-Z0-9_-]+$"
-            min_length: 3
-            max_length: 50
-        priority: 1
-      - type: "mqtt_payload_json"
-        config:
-          json_path: "$.device.id"
-          fallback_paths: ["$.deviceId", "$.id"]
-          validation:
-            device_id_regex: "^[a-zA-Z0-9_-]+$"
-        priority: 2
-    env:
+          device_id_extraction:
+            sources:
+              - type: "path_pattern"
+                pattern: "broker_data/{device_id}/data"
+                priority: 1
+                validation:
+                  min_length: 3
+                  max_length: 50
+                  pattern: "^[a-fA-F0-9]+$"
+              # - type: "json_payload"
+              #   json_path: "$.device.id"
+              #   fallback_paths: ["$.deviceId", "$.id", "$.device_id"]
+              #   priority: 4
+              #   validation:
+              #     min_length: 3
+              #     max_length: 50
+
       BROKER_HOST: "preservarium.fr"
       BROKER_PORT: "8883"
       KAFKA_BOOTSTRAP_SERVERS: "kafka:9092"

@@ -69,8 +69,9 @@ def check_container_health(container: docker.models.containers.Container) -> Tup
             
         # Get container logs to check for errors
         logs = container.logs(tail=50, timestamps=True).decode('utf-8').strip()
-        if "Error:" in logs or "error:" in logs:
-            return False, f"Container logs indicate errors: {logs.split('Error:')[-1].split('\\n')[0]}"
+        # Temporarily disable error detection to avoid restarting containers with debug logs
+        # if "Error:" in logs or "error:" in logs:
+        #     return False, f"Container logs indicate errors: {logs.split('Error:')[-1].split('\\n')[0]}"
             
         # Check if container is restarting too frequently
         if container.attrs['RestartCount'] > 0:

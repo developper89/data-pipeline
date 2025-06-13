@@ -8,6 +8,7 @@ import os
 import subprocess
 import importlib
 import logging
+import sys
 from typing import Dict, Any, Optional
 from pathlib import Path
 
@@ -21,6 +22,7 @@ class ProtobufCompiler:
         self.proto_schemas_dir = Path(f"/app/shared/translation/protobuf/proto_schemas/{manufacturer}")
         self.proto_output_dir = self.proto_schemas_dir / "protobuf"
         self.compiled_modules = {}
+        self._path_added = False
     
     def compile_proto_files(self) -> Dict[str, Any]:
         """
@@ -53,7 +55,10 @@ class ProtobufCompiler:
             # Compile all proto files at once (handles dependencies automatically)
             self._compile_proto_files(proto_files)
             
-            # Load compiled modules using standard imports
+            # Add protobuf output directory to Python path for imports
+            self._add_to_python_path()
+            
+            # Load compiled modules using direct imports
             self._load_compiled_modules()
             
             logger.info(f"Successfully compiled and loaded {len(self.compiled_modules)} protobuf modules for {self.manufacturer}")
@@ -88,8 +93,16 @@ class ProtobufCompiler:
         
         logger.debug(f"protoc compilation successful")
     
+    def _add_to_python_path(self):
+        """Add protobuf output directory to Python path."""
+        protobuf_path = str(self.proto_output_dir)
+        if protobuf_path not in sys.path:
+            sys.path.insert(0, protobuf_path)
+            self._path_added = True
+            logger.debug(f"Added {protobuf_path} to Python path")
+    
     def _load_compiled_modules(self):
-        """Load compiled Python modules using standard imports."""
+        """Load compiled Python modules using direct imports."""
         # Find all compiled _pb2.py files
         pb2_files = list(self.proto_output_dir.glob("*_pb2.py"))
         
@@ -97,9 +110,8 @@ class ProtobufCompiler:
             module_name = pb2_file.stem  # Remove .py extension
             
             try:
-                # Import using standard Python import mechanism
-                import_path = f"shared.translation.protobuf.proto_schemas.{self.manufacturer}.protobuf.{module_name}"
-                module = importlib.import_module(import_path)
+                # Import directly since protobuf directory is in sys.path
+                module = importlib.import_module(module_name)
                 
                 self.compiled_modules[module_name] = module
                 logger.debug(f"Loaded compiled module: {module_name}")
@@ -131,12 +143,20 @@ class ProtobufCompiler:
         return getattr(module, class_name)
     
     def cleanup(self):
-        """No cleanup needed with this approach."""
-        pass
+        """Remove protobuf directory from Python path if we added it."""
+        if self._path_added:
+            protobuf_path = str(self.proto_output_dir)
+            try:
+                sys.path.remove(protobuf_path)
+                self._path_added = False
+                logger.debug(f"Removed {protobuf_path} from Python path")
+            except ValueError:
+                # Path wasn't in sys.path
+                pass
     
     def __del__(self):
-        """No cleanup needed with this approach."""
-        pass
+        """Clean up on destruction."""
+        self.cleanup()
 
 
 def check_protoc_available() -> bool:

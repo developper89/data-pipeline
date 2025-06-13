@@ -9,9 +9,9 @@ import sys
 import os
 import logging
 
-# Configure logging to show debug information
+# Configure logging to show info level (less verbose than debug)
 logging.basicConfig(
-    level=logging.DEBUG,
+    level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
 )
 
@@ -95,12 +95,12 @@ def test_message_parser():
             "measurements": {
                 "proto_class": "ProtoMeasurements",
                 "proto_module": "proto_measurements_pb2",
-                "required_fields": ["serial_num", "battery_status"]
+                "required_fields": ["serialNum", "batteryStatus"]
             },
             "device_info": {
                 "proto_class": "ProtoDeviceInfo",
                 "proto_module": "proto_device_info_pb2",
-                "required_fields": ["serial_number"]
+                "required_fields": ["serialNumber"]
             },
             "config": {
                 "proto_class": "ProtoConfig",

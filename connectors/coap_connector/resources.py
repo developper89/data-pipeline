@@ -140,7 +140,7 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                     logger.debug(f"[{request_id}] RawMessage: {raw_message}")
                     
                     # In a real implementation, you would send this to Kafka:
-                    # await self.kafka_producer.send_raw_data(raw_message)
+                    await self.kafka_producer.publish_raw_message(raw_message)
                     
                 except Exception as e:
                     logger.error(f"[{request_id}] Failed to create RawMessage: {e}")

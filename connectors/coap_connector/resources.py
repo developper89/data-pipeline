@@ -106,9 +106,6 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
             # Log and analyze payload if present
             translation_result = None
             if payload_size > 0:
-                logger.info(f"  Payload: {request.payload}")
-                logger.info(f"  Payload (hex): {request.payload.hex()}")
-                
                 # Use translation manager to extract device ID
                 translation_result = self._extract_device_id_using_translation(request, request_id)
                 if translation_result and translation_result.success and translation_result.device_id:
@@ -116,11 +113,6 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                 elif translation_result and not translation_result.success:
                     logger.warning(f"  ⚠️  Translation failed: {translation_result.error}")
                 
-                try:
-                    payload_text = request.payload.decode('utf-8', errors='replace')[:100]
-                    logger.info(f"  Payload Preview (text): {repr(payload_text)}")
-                except:
-                    pass
             else:
                 logger.warning(f"  ⚠️  Empty payload - no device ID to extract")
                     

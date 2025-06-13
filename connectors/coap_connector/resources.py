@@ -53,6 +53,7 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         # Log and analyze payload if present
         extracted_device_id = None
         if payload_size > 0:
+            logger.info(f"  Payload: {request.payload}")
             logger.info(f"  Payload (hex): {request.payload.hex()}")
             
             # Try to extract device ID from payload

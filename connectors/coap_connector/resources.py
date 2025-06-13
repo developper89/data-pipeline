@@ -1,13 +1,9 @@
 # coap_gateway/resources.py
 import logging
-import json
-import os
 from datetime import datetime, timezone
-import uuid # To generate request ID if needed
 
 import aiocoap
 import aiocoap.resource as resource
-from kafka.errors import KafkaError
 
 from shared.models.common import RawMessage # Import shared model
 from shared.models.translation import RawData, TranslationResult

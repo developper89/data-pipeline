@@ -12,11 +12,19 @@ from kafka_producer import KafkaMsgProducer # The wrapper
 from server import CoapGatewayServer
 
 # Configure logging
+# logging.basicConfig(level=logging.DEBUG)
 logging.basicConfig(
-    # level=config.LOG_LEVEL,
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+        level=logging.DEBUG,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+# logging.basicConfig(
+#     # level=config.LOG_LEVEL,
+#     level=logging.DEBUG,
+#     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# )
 # logging.getLogger("aiocoap").setLevel(config.LOG_LEVEL) # aiocoap can be verbose
 # logging.getLogger("kafka").setLevel(logging.WARNING)
 

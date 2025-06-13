@@ -163,7 +163,7 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
             # Create RawData object from the CoAP request
             raw_data = RawData(
                 protocol="coap",
-                payload=request.payload,
+                payload_bytes=request.payload,
                 metadata={
                     "method": request.code.name if hasattr(request.code, 'name') else str(request.code),
                     "source": request.remote.hostinfo if hasattr(request.remote, 'hostinfo') else str(request.remote),
@@ -174,11 +174,11 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
             )
             
             # Use translation manager to extract device ID
-            result = self.translation_manager.translate(raw_data)
+            result = self.translation_manager.extract_device_id(raw_data)
             
             if result.success:
                 logger.info(f"[{request_id}] Translation successful using {result.translator_used}")
-                if result.parsed_data:
+                if hasattr(result, 'parsed_data') and result.parsed_data:
                     logger.debug(f"[{request_id}] Parsed data: {result.parsed_data}")
             else:
                 logger.warning(f"[{request_id}] Translation failed: {result.error}")
@@ -191,6 +191,5 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
             logger.error(f"[{request_id}] {error_msg}")
             return TranslationResult(
                 success=False,
-                error=error_msg,
-                raw_data=raw_data if 'raw_data' in locals() else None
+                error=error_msg
             )

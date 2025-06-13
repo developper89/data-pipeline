@@ -2,10 +2,6 @@ from typing import Optional, Tuple, Any, Dict
 import logging
 from .proto_compiler import ProtobufCompiler, check_protoc_available
 
-logging.basicConfig(
-    format= '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
-)
-
 logger = logging.getLogger(__name__)
 
 class ProtobufMessageParser:

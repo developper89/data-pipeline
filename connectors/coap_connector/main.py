@@ -11,26 +11,33 @@ import config
 from kafka_producer import KafkaMsgProducer # The wrapper
 from server import CoapGatewayServer
 
-# Configure logging
-# logging.basicConfig(level=logging.DEBUG)
-# logging.basicConfig(
-#         level=logging.DEBUG,
-#         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-#         handlers=[
-#             logging.StreamHandler(sys.stdout)
-#         ]
-#     )
-# logging.basicConfig(
-#     # level=config.LOG_LEVEL,
-#     level=logging.DEBUG,
-#     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-# )
-# logging.getLogger("aiocoap").setLevel(config.LOG_LEVEL) # aiocoap can be verbose
-# logging.getLogger("kafka").setLevel(logging.WARNING)
+# Configure logging GLOBALLY for the entire connector
+log_level = getattr(logging, config.LOG_LEVEL.upper(), logging.DEBUG)
+logging.basicConfig(
+    level=log_level,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+
+# Set specific log levels for noisy third-party libraries
+logging.getLogger("aiocoap").setLevel(logging.INFO)  # aiocoap can be very verbose
+logging.getLogger("kafka").setLevel(logging.WARNING)
+logging.getLogger("docker").setLevel(logging.WARNING)
+
+# Ensure our application loggers inherit the global config
+logging.getLogger("resources").setLevel(log_level)
+logging.getLogger("server").setLevel(log_level)
+logging.getLogger("shared.translation").setLevel(log_level)
 
 logger = logging.getLogger(__name__)
 
-logger.setLevel(logging.DEBUG)
+# Test logging configuration
+logger.info("🚀 CoAP Connector starting up...")
+logger.debug(f"🔧 Global logging configured: level={logging.getLevelName(log_level)}, format includes filename:lineno")
+logger.info(f"📊 Application loggers configured for level: {logging.getLevelName(log_level)}")
+
 # Global references for cleanup
 kafka_producer_wrapper: Optional[KafkaMsgProducer] = None
 server_instance: Optional[CoapGatewayServer] = None

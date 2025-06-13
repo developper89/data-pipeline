@@ -31,10 +31,12 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         self.command_consumer = command_consumer
         self.request_count = 0
         
+        logger.info("🚀 Initializing DataRootResource...")
+        
         # Initialize translation manager
         self.translation_manager = self._initialize_translation_manager()
         
-        logger.debug(f"Initialized DataRootResource with translation manager.")
+        logger.info(f"✅ DataRootResource initialized with translation manager.")
 
     def _initialize_translation_manager(self) -> TranslationManager:
         """Initialize the translation manager from YAML configuration."""
@@ -85,76 +87,86 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         self.request_count += 1
         request_id = f"REQ-{self.request_count:04d}"
         
-        # Extract request details
-        method = request.code.name if hasattr(request.code, 'name') else str(request.code)
-        source = request.remote.hostinfo if hasattr(request.remote, 'hostinfo') else str(request.remote)
-        payload_size = len(request.payload) if request.payload else 0
-        uri_path = list(request.opt.uri_path) if request.opt.uri_path else []
-        full_uri = request.get_request_uri() if hasattr(request, 'get_request_uri') else "unknown"
+        # Basic test log to confirm render method is called
+        logger.info(f"🔄 Processing request {request_id}")
         
-        # Log comprehensive request details
-        logger.info("=" * 80)
-        logger.info(f"🔍 INCOMING CoAP REQUEST [{request_id}]")
-        logger.info(f"  Method: {method}")
-        logger.info(f"  Source: {source}")
-        logger.info(f"  Full URI: {full_uri}")
-        logger.info(f"  Path Components: {uri_path}")
-        logger.info(f"  Payload Size: {payload_size} bytes")
-        
-        # Log and analyze payload if present
-        translation_result = None
-        if payload_size > 0:
-            logger.info(f"  Payload: {request.payload}")
-            logger.info(f"  Payload (hex): {request.payload.hex()}")
+        try:
+            # Extract request details
+            method = request.code.name if hasattr(request.code, 'name') else str(request.code)
+            source = request.remote.hostinfo if hasattr(request.remote, 'hostinfo') else str(request.remote)
+            payload_size = len(request.payload) if request.payload else 0
+            uri_path = list(request.opt.uri_path) if request.opt.uri_path else []
+            full_uri = request.get_request_uri() if hasattr(request, 'get_request_uri') else "unknown"
             
-            # Use translation manager to extract device ID
-            translation_result = self._extract_device_id_using_translation(request, request_id)
+            # Log comprehensive request details ALWAYS
+            logger.info("=" * 80)
+            logger.info(f"🔍 INCOMING CoAP REQUEST [{request_id}]")
+            logger.info(f"  Method: {method}")
+            logger.info(f"  Source: {source}")
+            logger.info(f"  Full URI: {full_uri}")
+            logger.info(f"  Path Components: {uri_path}")
+            logger.info(f"  Payload Size: {payload_size} bytes")
+            
+            # Log and analyze payload if present
+            translation_result = None
+            if payload_size > 0:
+                logger.info(f"  Payload: {request.payload}")
+                logger.info(f"  Payload (hex): {request.payload.hex()}")
+                
+                # Use translation manager to extract device ID
+                translation_result = self._extract_device_id_using_translation(request, request_id)
+                if translation_result and translation_result.success and translation_result.device_id:
+                    logger.info(f"  🏷️  EXTRACTED DEVICE ID: '{translation_result.device_id}' (translator: {translation_result.translator_used})")
+                elif translation_result and not translation_result.success:
+                    logger.warning(f"  ⚠️  Translation failed: {translation_result.error}")
+                
+                try:
+                    payload_text = request.payload.decode('utf-8', errors='replace')[:100]
+                    logger.info(f"  Payload Preview (text): {repr(payload_text)}")
+                except:
+                    pass
+            else:
+                logger.warning(f"  ⚠️  Empty payload - no device ID to extract")
+                    
+            logger.info("=" * 80)
+            
+            # Demo: Create RawMessage if device ID was extracted successfully
             if translation_result and translation_result.success and translation_result.device_id:
-                logger.info(f"  🏷️  EXTRACTED DEVICE ID: '{translation_result.device_id}' (translator: {translation_result.translator_used})")
-            elif translation_result and not translation_result.success:
-                logger.warning(f"  ⚠️  Translation failed: {translation_result.error}")
+                try:
+                    # Create RawMessage with extracted device_id
+                    raw_message = RawMessage(
+                        device_id=translation_result.device_id,
+                        timestamp=datetime.now(timezone.utc),
+                        payload_hex=request.payload.hex(),
+                        protocol="coap",
+                        metadata={
+                            "source": source,
+                            "method": method,
+                            "uri_path": uri_path,
+                            "translator_used": translation_result.translator_used,
+                            "request_id": request_id
+                        }
+                    )
+                    
+                    logger.info(f"[{request_id}] ✅ Created RawMessage for device {translation_result.device_id}")
+                    logger.debug(f"[{request_id}] RawMessage: {raw_message}")
+                    
+                    # In a real implementation, you would send this to Kafka:
+                    # await self.kafka_producer.send_raw_data(raw_message)
+                    
+                except Exception as e:
+                    logger.error(f"[{request_id}] Failed to create RawMessage: {e}")
             
-            try:
-                payload_text = request.payload.decode('utf-8', errors='replace')[:100]
-                logger.info(f"  Payload Preview (text): {repr(payload_text)}")
-            except:
-                pass
-        else:
-            logger.warning(f"  ⚠️  Empty payload - no device ID to extract")
-                
-        logger.info("=" * 80)
-        
-        # Demo: Create RawMessage if device ID was extracted successfully
-        if translation_result and translation_result.success and translation_result.device_id:
-            try:
-                # Create RawMessage with extracted device_id
-                raw_message = RawMessage(
-                    device_id=translation_result.device_id,
-                    timestamp=datetime.now(timezone.utc),
-                    payload_hex=request.payload.hex(),
-                    protocol="coap",
-                    metadata={
-                        "source": source,
-                        "method": method,
-                        "uri_path": uri_path,
-                        "translator_used": translation_result.translator_used,
-                        "request_id": request_id
-                    }
-                )
-                
-                logger.info(f"[{request_id}] ✅ Created RawMessage for device {translation_result.device_id}")
-                logger.debug(f"[{request_id}] RawMessage: {raw_message}")
-                
-                # In a real implementation, you would send this to Kafka:
-                # await self.kafka_producer.send_raw_data(raw_message)
-                
-            except Exception as e:
-                logger.error(f"[{request_id}] Failed to create RawMessage: {e}")
-        
+            # For now, just return Method Not Allowed for all direct requests
+            logger.warning(f"[{request_id}] Request received directly to root. Method Not Allowed.")
+            return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED, payload=b"Direct root access not allowed")
+
+        except Exception as e:
+            logger.error(f"❌ Error processing request details for {request_id}: {e}", exc_info=True)
+
         # For now, just return Method Not Allowed for all direct requests
         logger.warning(f"[{request_id}] Request received directly to root. Method Not Allowed.")
         return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED, payload=b"Direct root access not allowed")
-
 
     def _extract_device_id_using_translation(self, request, request_id: str) -> TranslationResult:
         """Extract device ID using the translation layer."""

@@ -24,15 +24,18 @@ class CoapGatewayServer:
         
     async def start(self):
         """Creates the CoAP context and starts the server."""
-        logger.info(f"Starting CoAP Gateway on {self.host}:{self.port}")
+        logger.info(f"🚀 Starting CoAP Gateway on {self.host}:{self.port}")
         try:
             # Initialize the command consumer
+            logger.info("📡 Initializing command consumer...")
             self.command_consumer = CommandConsumer()
             await self.command_consumer.start()
-            logger.info("Command consumer started")
+            logger.info("✅ Command consumer started")
             
             # Create the data resource that will handle both device data and commands
+            logger.info("🔧 Creating DataRootResource...")
             data_root = DataRootResource(self.kafka_producer, self.command_consumer)
+            logger.info("✅ DataRootResource created successfully")
             
             # Create a root site and mount the data resource under the configured path
             # root_site = resource.Site()
@@ -40,14 +43,16 @@ class CoapGatewayServer:
             # root_site.add_resource(['*'], data_root)
             
             # The aiocoap server context needs the site root
+            logger.info(f"🌐 Creating CoAP server context on {self.host}:{self.port}...")
             self.protocol = await aiocoap.Context.create_server_context(
                 data_root,  # Pass DataRootResource as the site root
                 bind=(self.host, self.port)
             )
             from datetime import datetime
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            logger.info(f"[{timestamp}] Registered CoAP 2 endpoint at path: /{'/'.join(config.COAP_BASE_DATA_PATH)}/{{device_id}}")
-            logger.info("CoAP server context created successfully.")
+            logger.info(f"✅ [{timestamp}] CoAP server listening on {self.host}:{self.port}")
+            logger.info(f"📍 Registered CoAP endpoint at path: /{'/'.join(config.COAP_BASE_DATA_PATH)}/{{device_id}}")
+            logger.info("🎯 CoAP server ready to accept requests!")
 
             # Keep the server running until stop event is set
             self._run_task = asyncio.create_task(self._wait_for_stop())

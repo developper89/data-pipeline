@@ -2,7 +2,19 @@ from typing import Optional, Tuple, Any, Dict
 import logging
 from .proto_loader import ProtoModuleLoader
 
-logger = logging.getLogger(__name__)
+logging.basicConfig(
+    format= '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
+)
+# Configure logger with file and line number
+# logger = logging.getLogger(__name__)
+# if not logger.handlers:
+#     handler = logging.StreamHandler()
+#     formatter = logging.Formatter(
+#         '%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s'
+#     )
+#     handler.setFormatter(formatter)
+#     logger.addHandler(handler)
+#     logger.setLevel(logging.DEBUG)
 
 class ProtobufMessageParser:
     """Generic protobuf message parser that works with any manufacturer's schemas."""

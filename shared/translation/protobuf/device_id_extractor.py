@@ -21,10 +21,12 @@ class ProtobufDeviceIdExtractor:
         """Extract device ID from parsed message using configured sources."""
         logger.debug(f"Extracting device ID from message type: {message_type}")
 
-        # Log available fields in the message for debugging
+        # Log available fields in the message for debugging - make this INFO so it's always visible
         if hasattr(parsed_message, 'DESCRIPTOR'):
             available_fields = [field.name for field in parsed_message.DESCRIPTOR.fields]
-            logger.debug(f"Available fields in {message_type}: {available_fields}")
+            logger.info(f"Available fields in {message_type}: {available_fields}")
+        else:
+            logger.info(f"Message type {message_type} has no DESCRIPTOR - available attributes: {dir(parsed_message)}")
 
         # Try configured sources in priority order
         for i, source in enumerate(self.sources):
@@ -33,7 +35,7 @@ class ProtobufDeviceIdExtractor:
                 continue
 
             field_path = source.get('field_path')
-            logger.debug(f"Trying source {i+1} (priority {source.get('priority', 999)}): {message_type}.{field_path}")
+            logger.info(f"Trying extraction source {i+1}: {message_type}.{field_path}")
             
             device_id = self._extract_from_field_path(parsed_message, field_path, message_type)
 
@@ -46,9 +48,11 @@ class ProtobufDeviceIdExtractor:
                 else:
                     logger.warning(f"Device ID '{device_id}' from {message_type}.{field_path} failed validation")
             else:
-                logger.debug(f"No device ID found in {message_type}.{field_path}")
+                logger.info(f"No device ID found in {message_type}.{field_path}")
 
-        logger.warning(f"No valid device ID found in {message_type} message using any configured source")
+        # Make this INFO level so configuration issues are always visible
+        configured_sources = [f"{s.get('message_type')}.{s.get('field_path')}" for s in self.sources]
+        logger.info(f"No valid device ID found in {message_type} message. Tried sources: {configured_sources}")
         return None
 
     def _extract_from_field_path(self, message: Any, field_path: str, message_type: str = "") -> Optional[str]:
@@ -62,21 +66,31 @@ class ProtobufDeviceIdExtractor:
                     current = getattr(current, field)
                     logger.debug(f"Found field '{field}' at path level {i+1}")
                 else:
-                    # Log available fields when field is not found
+                    # Log available fields when field is not found - make this INFO so it's always visible
                     if hasattr(current, 'DESCRIPTOR'):
                         available_fields = [f.name for f in current.DESCRIPTOR.fields]
-                        logger.error(f"Field '{field}' not found in {message_type} message at path '{'.'.join(path_parts[:i+1])}'")
-                        logger.error(f"Available fields at this level: {available_fields}")
+                        logger.info(f"Field '{field}' not found in {message_type} message at path '{'.'.join(path_parts[:i+1])}'")
+                        logger.info(f"Available fields at this level: {available_fields}")
                     else:
-                        logger.error(f"Field '{field}' not found in {message_type} message at path '{'.'.join(path_parts[:i+1])}'")
-                        logger.error(f"Object type: {type(current)}, available attributes: {dir(current)}")
+                        logger.info(f"Field '{field}' not found in {message_type} message at path '{'.'.join(path_parts[:i+1])}'")
+                        logger.info(f"Object type: {type(current)}, available attributes: {dir(current)}")
                     return None
 
             # Convert to string and log the result
             if isinstance(current, (str, bytes)):
-                result = current.decode('utf-8') if isinstance(current, bytes) else current
-                logger.debug(f"Extracted value from {field_path}: '{result}' (type: {type(current).__name__})")
-                return result
+                if isinstance(current, bytes):
+                    # Handle binary data - convert to hex string for device IDs
+                    if len(current) > 0:
+                        result = current.hex()
+                        logger.debug(f"Extracted bytes from {field_path}: {len(current)} bytes -> hex: '{result}'")
+                        return result
+                    else:
+                        logger.debug(f"Extracted empty bytes from {field_path}")
+                        return None
+                else:
+                    result = current
+                    logger.debug(f"Extracted string from {field_path}: '{result}'")
+                    return result
             else:
                 result = str(current)
                 logger.debug(f"Extracted value from {field_path}: '{result}' (converted from {type(current).__name__})")

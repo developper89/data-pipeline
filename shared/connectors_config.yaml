@@ -26,9 +26,15 @@ connectors:
               - message_type: "device_info"
                 field_path: "cloud_token"
                 priority: 2
+              - message_type: "config"
+                field_path: "serial_number"
+                priority: 3
+              - message_type: "config"
+                field_path: "cloud_token"
+                priority: 4
             validation:
-              regex: "^[a-fA-F0-9]{8,32}$"
-              normalize: false
+              regex: "^[a-fA-F0-9]{8,64}$"
+              normalize: true
           message_types:
             measurements:
               proto_class: "ProtoMeasurements"

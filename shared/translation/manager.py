@@ -23,16 +23,25 @@ class TranslationManager:
         """
         for translator in self.translators:
             try:
-                # if translator.can_handle(raw_data):
                 logger.debug(f"Using translator: {translator.__class__.__name__}")
-                return translator.extract_device_id(raw_data)
+                result = translator.extract_device_id(raw_data)  # Use translate method instead
+                
+                # If successful, return the result
+                if result.success and result.device_id:
+                    logger.debug(f"Successfully extracted device ID '{result.device_id}' using {translator.__class__.__name__}")
+                    return result
+                else:
+                    logger.debug(f"Translator {translator.__class__.__name__} failed or returned no device ID")
+                    continue
+                    
             except Exception as e:
                 logger.warning(f"Translator {translator.__class__.__name__} failed: {e}")
                 continue
         
         return TranslationResult(
             success=False,
-            error="No translator could handle this data"
+            error="No translator could handle this data",
+            raw_data=raw_data
         )
     
     def add_translator(self, translator: BaseTranslator):

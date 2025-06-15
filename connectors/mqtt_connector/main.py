@@ -3,6 +3,10 @@ import logging
 import signal
 import sys
 import time
+import os
+
+# Add the shared directory to the Python path
+# sys.path.insert(0, '/app/shared')
 
 from kafka_producer import KafkaMsgProducer
 from shared.mq.kafka_helpers import create_kafka_producer
@@ -11,14 +15,21 @@ from command_consumer import CommandConsumer
 import config
 
 # Configure logging
+log_level = getattr(logging, config.LOG_LEVEL.upper(), logging.DEBUG)
 logging.basicConfig(
-    # level=config.LOG_LEVEL,
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=log_level,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
 )
 
-# Suppress overly verbose library logs if desired
-# logging.getLogger("kafka").setLevel(logging.WARNING)
+logging.getLogger("kafka").setLevel(logging.WARNING)
+
+logging.getLogger("client").setLevel(log_level)
+logging.getLogger("shared.translation").setLevel(log_level)
+
+
 
 logger = logging.getLogger(__name__)
 

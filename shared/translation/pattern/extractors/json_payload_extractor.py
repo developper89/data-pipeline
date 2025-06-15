@@ -1,10 +1,10 @@
 # shared/translation/pattern/extractors/json_payload_extractor.py
 import json
 import logging
-from typing import Optional, Dict, Any, List, Union
-from ....models.translation import RawData
+from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
+
 
 class JsonPayloadExtractor:
     """
@@ -17,30 +17,37 @@ class JsonPayloadExtractor:
     - Multiple fallback paths
     """
     
-    def extract(self, raw_data: RawData, source_config: Dict[str, Any]) -> Optional[str]:
+    def __init__(self, config: Dict[str, Any]):
+        """
+        Initialize the JSON payload extractor.
+        
+        Args:
+            config: Configuration containing json_path and optional fallback_paths
+        """
+        self.config = config
+        self.json_path = config.get('json_path', '')
+        self.fallback_paths = config.get('fallback_paths', [])
+        
+        logger.debug(f"Initialized JsonPayloadExtractor with path '{self.json_path}' and {len(self.fallback_paths)} fallback paths")
+    
+    def extract_device_id(self, payload_bytes: bytes) -> Optional[str]:
         """
         Extract device ID from JSON payload using JSONPath expressions.
         
         Args:
-            raw_data: RawData containing MQTT payload
-            source_config: Configuration containing:
-                - json_path: Primary JSONPath expression
-                - fallback_paths: List of fallback JSONPath expressions
+            payload_bytes: Raw payload bytes to parse as JSON
                 
         Returns:
             Extracted device ID or None if not found
         """
-        json_path = source_config.get('json_path', '')
-        fallback_paths = source_config.get('fallback_paths', [])
-        
-        if not json_path:
+        if not self.json_path:
             logger.error("No json_path specified in json_payload source")
             return None
         
         # Parse payload as JSON
         try:
-            if raw_data.payload_bytes:
-                payload_str = raw_data.payload_bytes.decode('utf-8', errors='replace')
+            if payload_bytes:
+                payload_str = payload_bytes.decode('utf-8', errors='replace')
                 payload_json = json.loads(payload_str)
                 logger.debug(f"Successfully parsed JSON payload: {len(payload_str)} chars")
             else:
@@ -54,8 +61,8 @@ class JsonPayloadExtractor:
             logger.debug(f"Failed to decode payload as UTF-8: {e}")
             return None
         
-        # Try primary JSONPath
-        all_paths = [json_path] + fallback_paths
+        # Try primary JSONPath and fallbacks
+        all_paths = [self.json_path] + self.fallback_paths
         
         for i, path in enumerate(all_paths):
             path_type = "primary" if i == 0 else f"fallback_{i}"

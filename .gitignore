@@ -82,6 +82,11 @@ storage/temp/*
 # Generated model code
 **/generated/
 
+# Compiled protobuf files (keep .proto source files)
+*_pb2.py
+
+*pids.txt
+
 # Local backup files
 *.bak
 *.backup

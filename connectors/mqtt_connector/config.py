@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Kafka Config
-KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP", "localhost:9092")
-KAFKA_RAW_DATA_TOPIC = os.getenv("KAFKA_TOPIC", "iot_raw_data")
+KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+KAFKA_RAW_DATA_TOPIC = os.getenv("KAFKA_RAW_DATA_TOPIC", "iot_raw_data")
 KAFKA_ERROR_TOPIC = os.getenv("KAFKA_ERROR_TOPIC", "iot_errors") # Optional
 KAFKA_DEVICE_COMMANDS_TOPIC = os.getenv("KAFKA_DEVICE_COMMANDS_TOPIC", "device_commands") # Topic for device commands
 

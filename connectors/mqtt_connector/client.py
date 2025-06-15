@@ -9,6 +9,10 @@ import os
 import time
 import json
 from shared.models.common import RawMessage
+from shared.models.translation import RawData
+from shared.translation.manager import TranslationManager
+from shared.translation.factory import TranslatorFactory
+from shared.config_loader import get_translator_configs
 
 from kafka_producer import KafkaMsgProducer
 import config
@@ -53,6 +57,62 @@ class MQTTClientWrapper:
         self._setup_callbacks()
         self._setup_connection()
         self._connected = False
+        
+        # Initialize translation manager
+        self.translation_manager = self._initialize_translation_manager()
+
+    def _initialize_translation_manager(self) -> TranslationManager:
+        """Initialize the translation manager with configured translators."""
+        try:
+            # Get translator configurations for MQTT connector
+            translator_configs = get_translator_configs('mqtt-connector')
+            
+            if not translator_configs:
+                logger.warning("No translator configurations found for MQTT connector")
+                return TranslationManager([])
+            
+            translators = []
+            for translator_config in translator_configs:
+                translator = TranslatorFactory.create_translator(translator_config)
+                if translator:
+                    translators.append(translator)
+                    logger.info(f"Loaded translator: {translator.__class__.__name__}")
+                else:
+                    logger.warning(f"Failed to create translator from config: {translator_config}")
+            
+            logger.info(f"Initialized TranslationManager with {len(translators)} translator(s)")
+            return TranslationManager(translators)
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize translation manager: {e}")
+            return TranslationManager([])
+
+    def _extract_device_id_using_translation(self, topic: str, payload_bytes: bytes) -> str:
+        """Extract device ID using the translation layer."""
+        try:
+            # Create RawData for translation
+            raw_data = RawData(
+                payload_bytes=payload_bytes,
+                protocol='mqtt',
+                path=topic,  # Use path instead of topic for protocol-agnostic approach
+                metadata={'mqtt_topic': topic}
+            )
+            
+            # Use translation manager to extract device ID
+            result = self.translation_manager.extract_device_id(raw_data)
+            
+            if result.success and result.device_id:
+                logger.debug(f"Successfully extracted device ID '{result.device_id}' from topic '{topic}'")
+                return result.device_id
+            else:
+                logger.warning(f"Failed to extract device ID from topic '{topic}': {result.error}")
+                # Fallback to using the entire topic as device ID
+                raise Exception(f"Failed to extract device ID from topic '{topic}': {result.error}")
+                
+        except Exception as e:
+            logger.error(f"Error during device ID extraction: {e}")
+            # Fallback to using the entire topic as device ID
+            raise Exception(f"Failed to extract device ID from topic '{topic}': {e}")
 
     def _setup_callbacks(self):
         self.client.on_connect = self.on_connect
@@ -257,15 +317,9 @@ class MQTTClientWrapper:
 
     def on_message(self, client, userdata, msg):
         try:
+            # Use translation layer to extract device ID
+            device_id = self._extract_device_id_using_translation(msg.topic, msg.payload)
             
-            
-            topic_parts = msg.topic.split('/')
-            if len(topic_parts) >= 2 and topic_parts[0] == 'broker_data' and topic_parts[-1] == 'data':
-                 device_id = topic_parts[2]
-            else:
-                #  logger.warning(f"Could not extract device ID from topic: {msg.topic}. Using topic as ID.")
-                 device_id = msg.topic # Fallback or error
-
             payload_bytes = msg.payload
             
             # Convert binary payload to hex string to match RawMessage model expectation
@@ -282,8 +336,11 @@ class MQTTClientWrapper:
                     "mqtt_retain": msg.retain,
                 }
             )
+            
+            # Log specific device for debugging
             if device_id == "2207001":
                 logger.info(f"Received message on topic '{msg.topic}' (QoS {msg.qos})")
+                logger.info(f"Extracted device_id: {device_id}")
                 logger.info(f"payload_hex is: {raw_message.payload_hex}")
             
             # Publish to Kafka

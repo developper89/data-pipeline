@@ -10,8 +10,8 @@ validate_env() {
     # Required variables
     [[ -z "$BROKER_HOST" ]] && missing+=("BROKER_HOST")
     [[ -z "$BROKER_PORT" ]] && missing+=("BROKER_PORT")
-    [[ -z "$KAFKA_BOOTSTRAP" ]] && missing+=("KAFKA_BOOTSTRAP")
-    [[ -z "$KAFKA_TOPIC" ]] && missing+=("KAFKA_TOPIC")
+    [[ -z "$KAFKA_BOOTSTRAP_SERVERS" ]] && missing+=("KAFKA_BOOTSTRAP_SERVERS")
+    [[ -z "$KAFKA_RAW_DATA_TOPIC" ]] && missing+=("KAFKA_RAW_DATA_TOPIC")
     [[ -z "$MQTT_TOPICS" ]] && missing+=("MQTT_TOPICS")
     
     # If using TLS, validate certificate

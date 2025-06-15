@@ -8,13 +8,12 @@ import aiocoap.resource as resource
 from shared.models.common import RawMessage # Import shared model
 from shared.models.translation import RawData, TranslationResult
 from shared.translation.manager import TranslationManager
-from shared.translation.factory import create_translator
+from shared.translation.factory import TranslatorFactory
 from shared.config_loader import get_translator_configs, validate_translator_config
 from kafka_producer import KafkaMsgProducer # Import the Kafka producer wrapper
 from command_consumer import CommandConsumer
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
 class DataRootResource(resource.Resource): # Inherit from Site for automatic child handling
     """
     Acts as a factory for DeviceDataHandlerResource based on path.
@@ -38,7 +37,7 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         """Initialize the translation manager from YAML configuration."""
         try:
             # Get translator configurations for the CoAP connector
-            translator_configs = get_translator_configs('coap_preservarium')
+            translator_configs = get_translator_configs('coap-connector')
             
             if not translator_configs:
                 logger.info("No translator configurations found - running without translators")
@@ -53,11 +52,10 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                     continue
                 
                 translator_type = translator_config.get('type')
-                config = translator_config.get('config', {})
                 priority = translator_config.get('priority', 999)
                 
                 # Use factory to create translator
-                translator = create_translator(translator_type, config)
+                translator = TranslatorFactory.create_translator(translator_config)
                 if translator:
                     translators.append(translator)
                     logger.info(f"Created {translator_type} translator with priority {priority}")
@@ -140,21 +138,18 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                     logger.debug(f"[{request_id}] RawMessage: {raw_message}")
                     
                     # In a real implementation, you would send this to Kafka:
-                    await self.kafka_producer.publish_raw_message(raw_message)
+                    self.kafka_producer.publish_raw_message(raw_message)
+                    return aiocoap.Message(code=aiocoap.Code.CONTENT, payload=b"Raw message published")
                     
                 except Exception as e:
                     logger.error(f"[{request_id}] Failed to create RawMessage: {e}")
             
-            # For now, just return Method Not Allowed for all direct requests
-            logger.warning(f"[{request_id}] Request received directly to root. Method Not Allowed.")
-            return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED, payload=b"Direct root access not allowed")
-
         except Exception as e:
             logger.error(f"❌ Error processing request details for {request_id}: {e}", exc_info=True)
 
         # For now, just return Method Not Allowed for all direct requests
         logger.warning(f"[{request_id}] Request received directly to root. Method Not Allowed.")
-        return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED, payload=b"Direct root access not allowed")
+        return aiocoap.Message(code=aiocoap.Code.BAD_REQUEST, payload=b"Bad Request")
 
     def _extract_device_id_using_translation(self, request, request_id: str) -> TranslationResult:
         """Extract device ID using the translation layer."""

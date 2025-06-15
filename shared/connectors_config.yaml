@@ -5,14 +5,18 @@ connectors:
       - type: "protobuf"
         config:
           manufacturer: "efento"
+          path_mapping:
+            "i": "device_info"
+            "m": "measurements"
+            "c": "config"
           device_id_extraction:
             sources:
               - message_type: "measurements"
                 field_path: "serial_num"
-                priority: 1
+                priority: 2
               - message_type: "device_info"
                 field_path: "serial_num"
-                priority: 2
+                priority: 1
               - message_type: "config"
                 field_path: "serial_number"
                 priority: 3

@@ -91,11 +91,15 @@ class MQTTClientWrapper:
         """Extract device ID using the translation layer."""
         try:
             # Create RawData for translation
+            # Split topic path into components for pattern matching
             raw_data = RawData(
                 payload_bytes=payload_bytes,
                 protocol='mqtt',
-                path=topic,  # Use path instead of topic for protocol-agnostic approach
-                metadata={'mqtt_topic': topic}
+                path=topic,  # Generic path components for protocol-agnostic translators
+                metadata={
+                    'mqtt_topic': topic,  # Keep for backward compatibility
+                    'path_string': topic  # Also provide full path as string
+                }
             )
             
             # Use translation manager to extract device ID

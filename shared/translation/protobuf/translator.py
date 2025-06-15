@@ -40,6 +40,7 @@ class ProtobufTranslator(BaseTranslator):
     def extract_device_id(self, raw_data: RawData) -> TranslationResult:
         """
         Extract device ID from protobuf data using configured extraction sources.
+        Uses CoAP path mapping if available, otherwise falls back to priority-based detection.
         
         Args:
             raw_data: Raw message data containing protobuf payload
@@ -50,13 +51,67 @@ class ProtobufTranslator(BaseTranslator):
         logger.debug(f"Starting device ID extraction for {self.manufacturer} protobuf data")
         
         try:
-            # Parse the protobuf message
+            # Check for path mapping first
+            path_mapping = self.config.get('path_mapping', {})
+            mapped_message_type = None
+            
+            if path_mapping and raw_data.path:
+                # For all protocols, path is a string
+                # For CoAP: path is typically a single component like "i", "m", "c"
+                # For MQTT: path is a topic string like "broker_data/building1/device123/data"
+                # Try to map the whole path first, then first component if it contains '/'
+                
+                path_component = raw_data.path
+                mapped_message_type = path_mapping.get(path_component)
+                
+                # If no direct match and path contains '/', try first component
+                if not mapped_message_type and '/' in raw_data.path:
+                    path_component = raw_data.path.split('/')[0]
+                    mapped_message_type = path_mapping.get(path_component)
+                
+                if mapped_message_type:
+                    logger.info(f"🗺️  Path '{path_component}' mapped to message type '{mapped_message_type}'")
+            
+            # Try mapped message type first if available
+            if mapped_message_type:
+                try:
+                    logger.debug(f"Attempting to parse as mapped message type: {mapped_message_type}")
+                    message_type, parsed_message = self.message_parser.parse_message_as_type(
+                        raw_data.payload_bytes, mapped_message_type
+                    )
+                    
+                    if message_type:
+                        logger.info(f"✅ Successfully parsed using mapping: {mapped_message_type}")
+                        device_id = self.device_id_extractor.extract(message_type, parsed_message)
+                        
+                        if device_id:
+                            logger.info(f"✅ Device ID extracted using path mapping: {device_id}")
+                            return TranslationResult(
+                                success=True,
+                                device_id=device_id,
+                                translator_used=f"protobuf_{self.manufacturer}",
+                                metadata={
+                                    "manufacturer": self.manufacturer,
+                                    "message_type": message_type,
+                                    "extraction_source": self.device_id_extractor.last_source_used,
+                                    "path_mapping_used": True,
+                                    "path_component": path_component,
+                                    "original_path": raw_data.path
+                                }
+                            )
+                        else:
+                            logger.warning(f"⚠️  Mapped message type '{mapped_message_type}' parsed but no device ID found")
+                            
+                except Exception as e:
+                    logger.warning(f"⚠️  Path mapping failed for '{mapped_message_type}': {e}")
+                    
+            # Fallback to original priority-based detection
+            logger.info(f"🔄 Falling back to priority-based message type detection")
             logger.debug(f"Parsing protobuf payload of {len(raw_data.payload_bytes)} bytes")
             message_type, parsed_message = self.message_parser.parse_message(
                 raw_data.payload_bytes
             )
-            logger.info(f"Successfully parsed {message_type} message")
-
+            logger.info(f"Successfully parsed {message_type} message using priority detection")
             # Extract device ID using configured sources
             logger.debug(f"Extracting device ID from {message_type} message")
             device_id = self.device_id_extractor.extract(message_type, parsed_message)
@@ -70,7 +125,8 @@ class ProtobufTranslator(BaseTranslator):
                     metadata={
                         "manufacturer": self.manufacturer,
                         "message_type": message_type,
-                        "extraction_source": self.device_id_extractor.last_source_used
+                        "extraction_source": self.device_id_extractor.last_source_used,
+                        "path_mapping_used": False
                     }
                 )
             else:

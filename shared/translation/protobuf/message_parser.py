@@ -100,6 +100,42 @@ class ProtobufMessageParser:
             available_types = list(self.proto_modules.keys())
             logger.error(f"Unknown {self.manufacturer} message type. Available types: {available_types}")
             raise ValueError(f"Unknown {self.manufacturer} message type")
+    
+    def parse_message_as_type(self, payload: bytes, target_message_type: str) -> Tuple[Optional[str], Any]:
+        """
+        Try to parse protobuf message as a specific message type.
+        
+        Args:
+            payload: Raw protobuf bytes
+            target_message_type: Specific message type to try parsing as
+            
+        Returns:
+            Tuple of (message_type, parsed_message) if successful, (None, None) if failed
+        """
+        logger.debug(f"Trying to parse payload as specific message type: {target_message_type}")
+        
+        if target_message_type not in self.proto_modules:
+            available_types = list(self.proto_modules.keys())
+            logger.warning(f"Target message type '{target_message_type}' not available. Available types: {available_types}")
+            return None, None
+        
+        proto_info = self.proto_modules[target_message_type]
+        
+        if self._try_parse_message(payload, proto_info, target_message_type):
+            # Successfully parsed - create and return the parsed message
+            message = proto_info['class']()
+            message.ParseFromString(payload)
+            logger.info(f"Successfully parsed as {target_message_type} message")
+            
+            # Log available fields for debugging
+            if hasattr(message, 'DESCRIPTOR'):
+                available_fields = [field.name for field in message.DESCRIPTOR.fields]
+                logger.debug(f"Parsed {target_message_type} has fields: {available_fields}")
+            
+            return target_message_type, message
+        else:
+            logger.debug(f"Failed to parse payload as {target_message_type}")
+            return None, None
 
     def _try_parse_message(self, payload: bytes, proto_info: Dict, message_type: str = "") -> bool:
         """Try to parse payload as specific message type."""

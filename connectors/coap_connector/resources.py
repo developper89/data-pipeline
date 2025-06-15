@@ -89,7 +89,7 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
             method = request.code.name if hasattr(request.code, 'name') else str(request.code)
             source = request.remote.hostinfo if hasattr(request.remote, 'hostinfo') else str(request.remote)
             payload_size = len(request.payload) if request.payload else 0
-            uri_path = list(request.opt.uri_path) if request.opt.uri_path else []
+            uri_path = "/".join(list(request.opt.uri_path) if request.opt.uri_path else [])
             full_uri = request.get_request_uri() if hasattr(request, 'get_request_uri') else "unknown"
             
             # Log comprehensive request details ALWAYS
@@ -155,13 +155,15 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         """Extract device ID using the translation layer."""
         try:
             # Create RawData object from the CoAP request
+            uri_path = "/".join(list(request.opt.uri_path) if request.opt.uri_path else [])
             raw_data = RawData(
                 protocol="coap",
                 payload_bytes=request.payload,
+                path=uri_path,
                 metadata={
                     "method": request.code.name if hasattr(request.code, 'name') else str(request.code),
                     "source": request.remote.hostinfo if hasattr(request.remote, 'hostinfo') else str(request.remote),
-                    "uri_path": list(request.opt.uri_path) if request.opt.uri_path else [],
+                    "uri_path": uri_path,  # Keep for backward compatibility
                     "full_uri": request.get_request_uri() if hasattr(request, 'get_request_uri') else "unknown",
                     "request_id": request_id
                 }

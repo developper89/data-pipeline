@@ -51,7 +51,7 @@ class CoapGatewayServer:
             from datetime import datetime
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             logger.info(f"✅ [{timestamp}] CoAP server listening on {self.host}:{self.port}")
-            logger.info(f"📍 Registered CoAP endpoint at path: /{'/'.join(config.COAP_BASE_DATA_PATH)}/{{device_id}}")
+            logger.info(f"📍 Registered CoAP endpoint at path: {'/'.join(config.COAP_BASE_DATA_PATH)}")
             logger.info("🎯 CoAP server ready to accept requests!")
 
             # Keep the server running until stop event is set

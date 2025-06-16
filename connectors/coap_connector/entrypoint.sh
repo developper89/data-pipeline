@@ -14,7 +14,7 @@ validate_env() {
     [[ -z "$KAFKA_RAW_DATA_TOPIC" ]] && missing+=("KAFKA_RAW_DATA_TOPIC")
     [[ -z "$KAFKA_ERROR_TOPIC" ]] && missing+=("KAFKA_ERROR_TOPIC")
     [[ -z "$KAFKA_DEVICE_COMMANDS_TOPIC" ]] && missing+=("KAFKA_DEVICE_COMMANDS_TOPIC")
-    [[ -z "$COAP_BASE_DATA_PATH" ]] && missing+=("COAP_BASE_DATA_PATH")
+    # [[ -z "$COAP_BASE_DATA_PATH" ]] && missing+=("COAP_BASE_DATA_PATH")
     
     # If any required variables are missing, exit with error
     if [ ${#missing[@]} -ne 0 ]; then

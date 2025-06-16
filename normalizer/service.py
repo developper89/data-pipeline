@@ -35,12 +35,17 @@ from preservarium_sdk.infrastructure.sql_repository.sql_field_repository import 
 from preservarium_sdk.infrastructure.sql_repository.sql_sensor_repository import (
     SQLSensorRepository,
 )
+from preservarium_sdk.infrastructure.sql_repository.sql_hardware_repository import (
+    SQLHardwareRepository,
+)
 
 
 # Import local components
 from kafka_producer import NormalizerKafkaProducer  # Import the new wrapper
 from shared.utils.script_client import ScriptClient, ScriptNotFoundError
 from normalizer.validator import Validator  # Import the validator
+from shared.config_loader import get_translator_configs
+from shared.translation.factory import TranslatorFactory
 
 import config
 
@@ -55,12 +60,14 @@ class NormalizerService:
         parser_repository: SQLParserRepository,
         datatype_repository: Optional[SQLDatatypeRepository] = None,
         field_repository: Optional[SQLFieldRepository] = None,
-        sensor_repository: Optional[SQLSensorRepository] = None
+        sensor_repository: Optional[SQLSensorRepository] = None,
+        hardware_repository: Optional[SQLHardwareRepository] = None
     ):
         self.parser_repository = parser_repository
         self.datatype_repository = datatype_repository
         self.field_repository = field_repository
         self.sensor_repository = sensor_repository
+        self.hardware_repository = hardware_repository
         self.consumer: Optional[KafkaConsumer] = None
         # Use the dedicated wrapper for producing messages
         self.kafka_producer: Optional[NormalizerKafkaProducer] = None
@@ -114,7 +121,7 @@ class NormalizerService:
                 # if raw_message.device_id == "2207001":
                 #     logger.info(f"raw message device_id : {raw_message.device_id}, payload_hex: {raw_message.payload_hex}")
                 request_id = raw_message.request_id
-                logger.info(f"device_id: {raw_message.device_id}, payload_hex: {raw_message.payload_hex}")
+                # logger.info(f"device_id: {raw_message.device_id}, payload_hex: {raw_message.payload_hex}")
                 # Collect debug data
                 debug_entry = {
                     "device_id": raw_message.device_id,
@@ -205,7 +212,10 @@ class NormalizerService:
                 error_published = True
                 return True  # Assume non-retryable for now
 
-            # 4. Execute script in Sandbox
+            # 4. Fetch Hardware Configuration
+            hardware_config = await self._get_hardware_configuration(raw_message.device_id, request_id)
+
+            # 5. Initialize Translator and Execute script in Sandbox
             try:
                 if hasattr(script_module, "parse"):
                     logger.info(f"Starting parser module {script_module} ...")
@@ -213,9 +223,21 @@ class NormalizerService:
                     # Convert hex string payload back to bytes for parser
                     payload_bytes = bytes.fromhex(raw_message.payload_hex) if raw_message.payload_hex else b''
                     
+                    # Initialize translator based on translator_used metadata
+                    translator_instance = await self._initialize_translator(raw_message, request_id)
+                    
+                    if not translator_instance:
+                        # If no translator, skip this message or use fallback
+                        logger.warning(f"[{request_id}] No translator available for device {raw_message.device_id}")
+                    
                     parser_output_list = script_module.parse(
-                        payload=payload_bytes,  # Pass bytes to parser, not the hex string
-                        config=parser,  # Pass the fetched config
+                        payload=payload_bytes,  # Pass bytes to parser
+                        translator=translator_instance,  # Pass the translator instance
+                        metadata={
+                            **raw_message.metadata,  # Pass the raw message metadata
+                            'device_id': raw_message.device_id  # Include device_id in config
+                        },
+                        config=hardware_config
                     )
                     # logger.info(f"parser output: {parser_output_list}")
                     # logger.info(f"[{request_id}] Parser output for payload: {raw_message.payload}: {parser_output_list} ")
@@ -249,7 +271,7 @@ class NormalizerService:
                 error_published = True
                 return True  # Assume non-retryable
 
-            # 5. Construct and Validate Standardized Output
+            # 6. Construct and Validate Standardized Output
             try:
                 validated_data_list = []
                 all_validation_errors = []
@@ -350,7 +372,7 @@ class NormalizerService:
                 error_published = True
                 return True
 
-            # 6. Publish Standardized Data to Kafka using the wrapper
+            # 7. Publish Standardized Data to Kafka using the wrapper
             try:
                 # Ensure producer wrapper is available
                 if not self.kafka_producer:
@@ -497,6 +519,70 @@ class NormalizerService:
             all_errors.append(error_msg)
                     
         return valid_outputs, all_errors
+
+    async def _initialize_translator(self, raw_message: RawMessage, request_id: Optional[str] = None):
+        """
+        Initialize translator instance based on raw message metadata.
+        
+        Args:
+            raw_message: The raw message containing metadata with translator_used
+            request_id: Optional request ID for logging
+            
+        Returns:
+            Translator instance or None if initialization fails
+        """
+        try:
+            # Extract translator information from metadata
+            translator_used = raw_message.metadata.get('translator_used')
+            protocol = raw_message.protocol
+            
+            if not translator_used:
+                logger.warning(f"[{request_id}] No translator_used found in metadata for device {raw_message.device_id}")
+                return None
+            
+            logger.debug(f"[{request_id}] Initializing translator '{translator_used}' for protocol '{protocol}'")
+            
+            # Determine connector ID based on protocol
+            connector_id = f"{protocol}-connector"
+            
+            # Get translator configurations for the appropriate connector
+            translator_configs = get_translator_configs(connector_id)
+            
+            if not translator_configs:
+                logger.warning(f"[{request_id}] No translator configurations found for connector '{connector_id}'")
+                return None
+            
+            # Find the matching translator configuration
+            matching_config = None
+            for config_item in translator_configs:
+                translator_type = config_item.get('type')
+                config_details = config_item.get('config', {})
+                manufacturer = config_details.get('manufacturer', '')
+                
+                # Construct expected translator_used name (e.g., "protobuf_efento")
+                expected_name = f"{translator_type}_{manufacturer}" if manufacturer else translator_type
+                
+                if expected_name == translator_used:
+                    matching_config = config_item
+                    break
+            
+            if not matching_config:
+                logger.warning(f"[{request_id}] No matching translator config found for '{translator_used}'")
+                return None
+            
+            # Create translator instance using the factory
+            translator_instance = TranslatorFactory.create_translator(matching_config)
+            
+            if translator_instance:
+                logger.debug(f"[{request_id}] Successfully initialized translator '{translator_used}'")
+                return translator_instance
+            else:
+                logger.error(f"[{request_id}] Failed to create translator instance for '{translator_used}'")
+                return None
+                
+        except Exception as e:
+            logger.exception(f"[{request_id}] Error initializing translator: {e}")
+            return None
 
     async def _save_debug_data(self):
         """
@@ -759,3 +845,29 @@ class NormalizerService:
         self._running = False
         self._stop_event.set()
         # Closing clients is handled in the finally block of the run loop upon exit.
+
+    async def _get_hardware_configuration(self, device_id: str, request_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Get hardware configuration for a device using the hardware repository.
+        
+        Args:
+            device_id: The device ID (sensor parameter) to get hardware configuration for
+            request_id: Optional request ID for logging
+            
+        Returns:
+            Hardware configuration dictionary or None if not found
+        """
+        try:
+                
+            # Get the hardware directly by sensor parameter (device_id)
+            hardware = await self.hardware_repository.get_hardware_by_sensor_parameter(device_id)
+            if not hardware:
+                logger.warning(f"[{request_id}] No hardware found for sensor parameter {device_id}")
+                return {}
+                
+            logger.debug(f"[{request_id}] Found hardware configuration for device {device_id}: {hardware.name}")
+            return hardware.configuration
+            
+        except Exception as e:
+            logger.error(f"[{request_id}] Error fetching hardware configuration for device {device_id}: {e}")
+            return {}

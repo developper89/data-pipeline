@@ -158,6 +158,42 @@ class ProtobufCompiler:
         """Clean up on destruction."""
         self.cleanup()
 
+    def try_load_existing_modules(self) -> bool:
+        """
+        Try to load existing compiled protobuf modules without compilation.
+        
+        Returns:
+            bool: True if existing modules were successfully loaded, False otherwise
+        """
+        try:
+            # Check if output directory exists
+            if not self.proto_output_dir.exists():
+                logger.debug(f"Proto output directory does not exist: {self.proto_output_dir}")
+                return False
+            
+            # Check if there are any compiled _pb2.py files
+            pb2_files = list(self.proto_output_dir.glob("*_pb2.py"))
+            if not pb2_files:
+                logger.debug(f"No compiled _pb2.py files found in {self.proto_output_dir}")
+                return False
+            
+            # Add protobuf output directory to Python path for imports
+            self._add_to_python_path()
+            
+            # Try to load all compiled modules
+            self._load_compiled_modules()
+            
+            if self.compiled_modules:
+                logger.info(f"Successfully loaded {len(self.compiled_modules)} existing compiled modules for {self.manufacturer}")
+                return True
+            else:
+                logger.debug(f"No modules could be loaded for {self.manufacturer}")
+                return False
+                
+        except Exception as e:
+            logger.debug(f"Failed to load existing modules for {self.manufacturer}: {e}")
+            return False
+
 
 def check_protoc_available() -> bool:
     """Check if protoc compiler is available."""

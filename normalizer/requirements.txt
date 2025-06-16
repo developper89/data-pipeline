@@ -4,3 +4,5 @@ sqlalchemy[asyncio]
 asyncpg==0.30.0
 pydantic==2.11.1
 aiofiles==24.1.0
+PyYAML==6.0.2
+protobuf>=6.31.1

@@ -12,6 +12,7 @@ from shared.translation.factory import TranslatorFactory
 from shared.config_loader import get_translator_configs, validate_translator_config
 from kafka_producer import KafkaMsgProducer # Import the Kafka producer wrapper
 from command_consumer import CommandConsumer
+import config
 
 logger = logging.getLogger(__name__)
 class DataRootResource(resource.Resource): # Inherit from Site for automatic child handling
@@ -74,7 +75,19 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
             logger.info("Creating empty translation manager")
             return TranslationManager([])
     
-
+    def _generate_well_known_core_response(self) -> str:
+        """Generate CoAP Link Format response for .well-known/core discovery."""
+        # Generate the base data path from config
+        base_path = "/" + "/".join(config.COAP_BASE_DATA_PATH)
+        
+        # CoAP Link Format according to RFC 6690
+        # Format: </path>;ct=content-type;rt=resource-type;if=interface
+        resources = [
+            f'<{base_path}>;ct=0;rt="iot.data";title="IoT Data Ingestion Endpoint"',
+            f'<{base_path}/{{device_id}}>;ct=0;rt="iot.device";title="Device Data Endpoint"'
+        ]
+        
+        return ",".join(resources)
 
     async def render(self, request):
         """Monitor all incoming requests and log details."""
@@ -89,7 +102,8 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
             method = request.code.name if hasattr(request.code, 'name') else str(request.code)
             source = request.remote.hostinfo if hasattr(request.remote, 'hostinfo') else str(request.remote)
             payload_size = len(request.payload) if request.payload else 0
-            uri_path = "/".join(list(request.opt.uri_path) if request.opt.uri_path else [])
+            uri_path_list = list(request.opt.uri_path) if request.opt.uri_path else []
+            uri_path = "/".join(uri_path_list)
             full_uri = request.get_request_uri() if hasattr(request, 'get_request_uri') else "unknown"
             
             # Log comprehensive request details ALWAYS
@@ -98,8 +112,26 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
             logger.info(f"  Method: {method}")
             logger.info(f"  Source: {source}")
             logger.info(f"  Full URI: {full_uri}")
-            logger.info(f"  Path Components: {uri_path}")
+            logger.info(f"  Path Components: {uri_path_list}")
             logger.info(f"  Payload Size: {payload_size} bytes")
+            
+            # Handle .well-known/core discovery requests
+            if len(uri_path_list) == 2 and uri_path_list[0] == ".well-known" and uri_path_list[1] == "core":
+                if method == "GET":
+                    logger.info(f"[{request_id}] 🔍 Handling CoAP resource discovery request")
+                    well_known_response = self._generate_well_known_core_response()
+                    logger.info(f"[{request_id}] ✅ Returning resource discovery: {well_known_response}")
+                    logger.info("=" * 80)
+                    
+                    return aiocoap.Message(
+                        code=aiocoap.Code.CONTENT,
+                        payload=well_known_response.encode('utf-8'),
+                        content_format=40  # application/link-format
+                    )
+                else:
+                    logger.warning(f"[{request_id}] Method {method} not allowed for .well-known/core")
+                    logger.info("=" * 80)
+                    return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED)
             
             # Log and analyze payload if present
             translation_result = None
@@ -135,10 +167,27 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                     )
                     
                     logger.info(f"[{request_id}] ✅ Created RawMessage for device {translation_result.device_id}")
-                    logger.debug(f"[{request_id}] RawMessage: {raw_message}")
                     
                     # In a real implementation, you would send this to Kafka:
                     self.kafka_producer.publish_raw_message(raw_message)
+                    
+                    # formatted_command = await self.command_consumer.get_formatted_command(translation_result.device_id)
+            
+                    # if formatted_command:
+                    #     # Get the command details for logging
+                    #     pending_commands = self.command_consumer.get_pending_commands(translation_result.device_id)
+                    #     command_id = pending_commands[0].get("request_id", "unknown") if pending_commands else "unknown"
+                        
+                    #     logger.info(f"[{request_id}] Sending formatted command {command_id} to device {translation_result.device_id}")
+                        
+                    #     # Acknowledge the command was sent (removes from pending)
+                    #     if pending_commands:
+                    #         self.command_consumer.acknowledge_command(translation_result.device_id, command_id)
+                        
+                    #     # Send the formatted binary command in response
+                    #     success_code = aiocoap.Code.CHANGED if method == "PUT" else aiocoap.Code.CREATED
+                    #     return aiocoap.Message(code=success_code, payload=formatted_command)
+            
                     return aiocoap.Message(code=aiocoap.Code.CONTENT, payload=b"Raw message published")
                     
                 except Exception as e:
@@ -147,9 +196,9 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         except Exception as e:
             logger.error(f"❌ Error processing request details for {request_id}: {e}", exc_info=True)
 
-        # For now, just return Method Not Allowed for all direct requests
-        logger.warning(f"[{request_id}] Request received directly to root. Method Not Allowed.")
-        return aiocoap.Message(code=aiocoap.Code.BAD_REQUEST, payload=b"Bad Request")
+        # For requests that don't match well-known or have device data, return appropriate response
+        logger.warning(f"[{request_id}] Request doesn't match expected patterns. Bad Request.")
+        return aiocoap.Message(code=aiocoap.Code.BAD_REQUEST, payload=b"Bad Request - Invalid endpoint or missing device data")
 
     def _extract_device_id_using_translation(self, request, request_id: str) -> TranslationResult:
         """Extract device ID using the translation layer."""

@@ -39,8 +39,6 @@ class KafkaMsgProducer:
             KafkaError: If publishing fails due to Kafka-related issues.
             Exception: For other unexpected publishing errors.
         """
-        if not isinstance(message, RawMessage):
-            raise TypeError("Message must be an instance of RawMessage")
 
         try:
             # Use device_id as the key for partitioning raw data
@@ -48,7 +46,7 @@ class KafkaMsgProducer:
             topic = config.KAFKA_RAW_DATA_TOPIC
             value = message.model_dump() # Convert Pydantic model to dict
 
-            logger.debug(f"[{message.request_id}] Publishing RawMessage to topic '{topic}' with key '{key}'")
+            logger.debug(f"Published raw message for device {message.device_id} (req: {message.request_id}) to Kafka topic '{config.KAFKA_RAW_DATA_TOPIC}' with payload: {message.payload_hex}")
             # Use the synchronous helper function
             publish_message(self.producer, topic, value, key)
             # Logging of success/failure happens within publish_message helper

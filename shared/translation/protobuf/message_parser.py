@@ -24,20 +24,29 @@ class ProtobufMessageParser:
             logger.error("protobuf package not installed. Run: pip install protobuf>=4.21.0")
             return
 
-        # Check if protoc compiler is available
-        if not check_protoc_available():
-            logger.error("protoc compiler not available. Please install protobuf compiler.")
-            return
-
         # Initialize dynamic compiler
         self.compiler = ProtobufCompiler(self.manufacturer)
         
-        # Compile .proto files to Python modules
-        compiled_modules = self.compiler.compile_proto_files()
+        # First, try to load existing compiled modules
+        existing_modules_loaded = self._try_load_existing_modules()
         
-        if not compiled_modules:
-            logger.warning(f"No protobuf modules compiled for {self.manufacturer}")
-            return
+        if not existing_modules_loaded:
+            # If existing modules couldn't be loaded, compile them
+            logger.info(f"Existing compiled modules not found for {self.manufacturer}, compiling...")
+            
+            # Check if protoc compiler is available
+            if not check_protoc_available():
+                logger.error("protoc compiler not available. Please install protobuf compiler.")
+                return
+
+            # Compile .proto files to Python modules
+            compiled_modules = self.compiler.compile_proto_files()
+            
+            if not compiled_modules:
+                logger.warning(f"No protobuf modules compiled for {self.manufacturer}")
+                return
+            
+            logger.info(f"Successfully compiled protobuf modules for {self.manufacturer}")
 
         # Map message types to compiled classes
         for message_type, config in self.message_types.items():
@@ -62,6 +71,21 @@ class ProtobufMessageParser:
                 continue
 
         logger.info(f"Successfully loaded {len(self.proto_modules)} protobuf message types for {self.manufacturer}")
+
+    def _try_load_existing_modules(self) -> bool:
+        """
+        Try to load existing compiled protobuf modules.
+        
+        Returns:
+            bool: True if existing modules were successfully loaded, False otherwise
+        """
+        try:
+            # Use the compiler's method to try loading existing modules
+            return self.compiler.try_load_existing_modules()
+            
+        except Exception as e:
+            logger.debug(f"Failed to load existing modules for {self.manufacturer}: {e}")
+            return False
 
     def detect_message_type(self, payload: bytes) -> Optional[str]:
         """Detect the type of protobuf message."""
@@ -135,6 +159,39 @@ class ProtobufMessageParser:
             return target_message_type, message
         else:
             logger.debug(f"Failed to parse payload as {target_message_type}")
+            return None, None
+
+    def parse_message_to_dict(self, payload: bytes) -> Tuple[Optional[str], Optional[Dict]]:
+        """
+        Parse protobuf message and return type and dictionary representation.
+        
+        Args:
+            payload: Raw protobuf bytes
+            
+        Returns:
+            Tuple of (message_type, message_dict) if successful, (None, None) if failed
+        """
+        try:
+            message_type, parsed_message = self.parse_message(payload)
+            
+            if not message_type or not parsed_message:
+                return None, None
+            
+            # Convert protobuf message to dictionary
+            try:
+                from google.protobuf.json_format import MessageToDict
+                message_dict = MessageToDict(parsed_message, preserving_proto_field_name=True)
+                logger.debug(f"Successfully converted {message_type} to dictionary")
+                return message_type, message_dict
+            except ImportError:
+                logger.error("protobuf package not available for MessageToDict conversion")
+                return None, None
+            except Exception as e:
+                logger.error(f"Failed to convert {message_type} to dictionary: {e}")
+                return None, None
+                
+        except Exception as e:
+            logger.error(f"Failed to parse message to dict: {e}")
             return None, None
 
     def _try_parse_message(self, payload: bytes, proto_info: Dict, message_type: str = "") -> bool:

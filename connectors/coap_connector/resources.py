@@ -84,7 +84,7 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         # Format: </path>;ct=content-type;rt=resource-type;if=interface
         resources = [
             f'<{base_path}>;ct=0;rt="iot.data";title="IoT Data Ingestion Endpoint"',
-            f'<{base_path}/{{device_id}}>;ct=0;rt="iot.device";title="Device Data Endpoint"'
+            # f'<{base_path}/{{device_id}}>;ct=0;rt="iot.device";title="Device Data Endpoint"'
         ]
         
         return ",".join(resources)

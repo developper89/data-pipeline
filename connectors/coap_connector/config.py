@@ -18,4 +18,4 @@ KAFKA_DEVICE_COMMANDS_TOPIC = os.getenv("KAFKA_DEVICE_COMMANDS_TOPIC", "device_c
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 SERVICE_NAME = "coap_connector"
 # Base path for data ingestion (e.g., devices POST to /data/device123)
-COAP_BASE_DATA_PATH = tuple(filter(None, os.getenv("COAP_BASE_DATA_PATH", "data").split('/'))) # -> ('data',)
+COAP_BASE_DATA_PATH = tuple(filter(None, os.getenv("COAP_BASE_DATA_PATH", "").split('/'))) # -> ('data',)

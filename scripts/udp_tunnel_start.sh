@@ -1,15 +1,12 @@
+# ==============================================================================
+# 1. udp_tunnel_start.sh - Your current tunnel start script
+# ==============================================================================
 #!/bin/bash
-# udp_tunnel_start.sh - Resilient UDP tunnel with auto-restart
+# udp_tunnel_start.sh
 
 PID_FILE="./scripts/udp_tunnel_pids.txt"
-LOG_FILE="./scripts/tunnel.log"
-HEALTH_CHECK_INTERVAL=30
-MAX_RETRIES=5
 
-# Logging function
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
-}
+echo "Starting UDP Tunnel for CoAP Traffic..."
 
 # Function to safely kill a process by PID
 safe_kill() {
@@ -17,13 +14,16 @@ safe_kill() {
     local process_name=$2
     
     if kill -0 "$pid" 2>/dev/null; then
+        # First try graceful termination
         kill -TERM "$pid" 2>/dev/null
         sleep 2
+        
+        # Check if process is still running
         if kill -0 "$pid" 2>/dev/null; then
             kill -KILL "$pid" 2>/dev/null
-            log "Force killed $process_name (PID: $pid)"
+            echo "Force killed $process_name (PID: $pid)"
         else
-            log "Gracefully stopped $process_name (PID: $pid)"
+            echo "Gracefully stopped $process_name (PID: $pid)"
         fi
     fi
 }
@@ -31,9 +31,11 @@ safe_kill() {
 # Function to safely kill processes using specific ports (Docker-aware)
 safe_port_cleanup() {
     local port=$1
-    log "Cleaning up port $port..."
+    echo "Cleaning up port $port..."
     
+    # Get PIDs using the port, but exclude Docker processes
     local pids=$(sudo lsof -ti :$port 2>/dev/null | while read pid; do
+        # Check if this is a Docker-related process
         local process_info=$(ps -p $pid -o comm= 2>/dev/null)
         if [[ ! "$process_info" =~ (docker|com.docker|Docker) ]]; then
             echo $pid
@@ -43,153 +45,76 @@ safe_port_cleanup() {
     if [ -n "$pids" ]; then
         for pid in $pids; do
             local process_name=$(ps -p $pid -o comm= 2>/dev/null)
-            log "Found non-Docker process on port $port: $process_name (PID: $pid)"
+            echo "Found non-Docker process on port $port: $process_name (PID: $pid)"
             safe_kill "$pid" "$process_name"
         done
-    fi
-}
-
-# Function to test tunnel connectivity
-test_tunnel() {
-    # Test if we can establish SSH connection
-    if ! ssh -o ConnectTimeout=5 -o BatchMode=yes pres exit >/dev/null 2>&1; then
-        return 1
-    fi
-    
-    # Test if local port is responding
-    if ! nc -z localhost 5684 >/dev/null 2>&1; then
-        return 1
-    fi
-    
-    return 0
-}
-
-# Function to start tunnel components
-start_tunnel() {
-    log "Starting tunnel components..."
-    
-    # Clean up any existing processes
-    cleanup_tunnel
-    
-    # Start SSH tunnel with keep-alive
-    ssh -o ServerAliveInterval=60 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
-        -R 5684:localhost:5684 pres -N &
-    SSH_PID=$!
-    echo "SSH_TUNNEL:$SSH_PID" > "$PID_FILE"
-    log "SSH Tunnel started (PID: $SSH_PID)"
-    
-    sleep 3
-    
-    # Verify SSH tunnel is working
-    if ! kill -0 "$SSH_PID" 2>/dev/null; then
-        log "ERROR: SSH tunnel failed to start"
-        return 1
-    fi
-    
-    # Start server-side UDP relay
-    ssh pres "nohup sudo socat UDP4-LISTEN:5683,fork TCP:localhost:5684 >/dev/null 2>&1 &" &
-    SERVER_RELAY_PID=$!
-    echo "SERVER_RELAY:$SERVER_RELAY_PID" >> "$PID_FILE"
-    log "Server relay started (PID: $SERVER_RELAY_PID)"
-    
-    sleep 2
-    
-    # Start local TCP→UDP relay
-    socat TCP4-LISTEN:5684,fork UDP:localhost:5683 &
-    LOCAL_RELAY_PID=$!
-    echo "LOCAL_RELAY:$LOCAL_RELAY_PID" >> "$PID_FILE"
-    log "Local relay started (PID: $LOCAL_RELAY_PID)"
-    
-    sleep 2
-    
-    # Test connectivity
-    if test_tunnel; then
-        log "✅ Tunnel established successfully"
-        return 0
     else
-        log "❌ Tunnel test failed"
-        return 1
+        echo "No non-Docker processes found using port $port"
     fi
 }
 
-# Function to cleanup tunnel
-cleanup_tunnel() {
-    if [ -f "$PID_FILE" ]; then
-        log "Cleaning up tunnel processes..."
-        while read -r pid_line; do
-            if [ -n "$pid_line" ]; then
-                process_name=$(echo "$pid_line" | cut -d: -f1)
-                pid=$(echo "$pid_line" | cut -d: -f2)
-                safe_kill "$pid" "$process_name"
-            fi
-        done < "$PID_FILE"
-        rm "$PID_FILE"
-    fi
-    
-    safe_port_cleanup 5683
-    safe_port_cleanup 5684
-    pkill -f "socat.*5683" 2>/dev/null
-    pkill -f "socat.*5684" 2>/dev/null
-    
-    # Clean up remote socat processes
-    ssh pres "sudo pkill -f 'socat.*5683'" 2>/dev/null || true
-}
+# Kill existing tunnel processes from previous runs
+if [ -f "$PID_FILE" ]; then
+    echo "Cleaning up previous tunnel processes..."
+    while read -r pid_line; do
+        process_name=$(echo "$pid_line" | cut -d: -f1)
+        pid=$(echo "$pid_line" | cut -d: -f2)
+        safe_kill "$pid" "$process_name"
+    done < "$PID_FILE"
+    rm "$PID_FILE"
+fi
 
-# Function to monitor and restart tunnel
-monitor_tunnel() {
-    local retry_count=0
-    
-    while true; do
-        if test_tunnel; then
-            log "Tunnel health check: OK"
-            retry_count=0
-        else
-            log "Tunnel health check: FAILED"
-            retry_count=$((retry_count + 1))
-            
-            if [ $retry_count -le $MAX_RETRIES ]; then
-                log "Attempting to restart tunnel (attempt $retry_count/$MAX_RETRIES)"
-                if start_tunnel; then
-                    log "Tunnel restarted successfully"
-                    retry_count=0
-                else
-                    log "Tunnel restart failed"
-                    sleep $((retry_count * 10))  # Exponential backoff
-                fi
-            else
-                log "Max retries exceeded. Sleeping for 5 minutes before trying again..."
-                sleep 300
-                retry_count=0
-            fi
-        fi
-        
-        sleep $HEALTH_CHECK_INTERVAL
-    done
-}
+# Clean up ports safely (avoid Docker processes)
+safe_port_cleanup 5683
+safe_port_cleanup 5684
 
-# Handle signals for graceful shutdown
-trap 'log "Received shutdown signal"; cleanup_tunnel; exit 0' SIGTERM SIGINT
+# Kill only socat processes (not Docker processes)
+echo "Cleaning up socat processes..."
+pkill -f "socat.*5683" 2>/dev/null
+pkill -f "socat.*5684" 2>/dev/null
 
-# Prevent system sleep while script is running
-caffeinate -i -s &
-CAFFEINATE_PID=$!
-log "Started caffeinate to prevent system sleep (PID: $CAFFEINATE_PID)"
-
-# Verify Docker is available
+# Verify Docker is still running
 if ! docker info >/dev/null 2>&1; then
-    log "ERROR: Docker is not available"
+    echo "⚠️  Warning: Docker appears to be unavailable. You may need to restart Docker Desktop."
+    echo "   This might have happened due to system processes being affected."
+    echo "   Please restart Docker Desktop and try again."
     exit 1
 fi
 
-log "Starting UDP tunnel with auto-restart capability..."
+# Start tunnel components in background
+echo "Starting SSH tunnel..."
+ssh -R 5684:localhost:5684 pres -N &
+SSH_PID=$!
+echo "SSH_TUNNEL:$SSH_PID" > "$PID_FILE"
 
-# Initial tunnel setup
-if start_tunnel; then
-    log "Initial tunnel setup successful. Starting monitoring..."
-    monitor_tunnel
+sleep 2
+
+echo "Starting server-side UDP relay..."
+ssh pres "sudo socat UDP4-LISTEN:5683,fork TCP:localhost:5684" &
+SERVER_RELAY_PID=$!
+echo "SERVER_RELAY:$SERVER_RELAY_PID" >> "$PID_FILE"
+
+sleep 2
+
+echo "Starting local TCP→UDP relay..."
+socat TCP4-LISTEN:5684,fork UDP:localhost:5683 &
+LOCAL_RELAY_PID=$!
+echo "LOCAL_RELAY:$LOCAL_RELAY_PID" >> "$PID_FILE"
+
+echo "UDP Tunnel started successfully!"
+echo "SSH Tunnel PID: $SSH_PID"
+echo "Server Relay PID: $SERVER_RELAY_PID"
+echo "Local Relay PID: $LOCAL_RELAY_PID"
+echo "PIDs saved to: $PID_FILE"
+
+# Verify Docker is still working
+if docker info >/dev/null 2>&1; then
+    echo "✅ Docker daemon is still running"
 else
-    log "Initial tunnel setup failed"
-    cleanup_tunnel
-    kill $CAFFEINATE_PID 2>/dev/null
-    exit 1
+    echo "⚠️  Warning: Docker daemon may have been affected"
 fi
+
+echo ""
+echo "Monitor traffic with: sudo tcpdump -i any port 5683 -v"
+echo "Start CoAP connector with: docker-compose up coap-connector"
+echo "Stop tunnel with: ./udp_tunnel_stop.sh"

@@ -7,6 +7,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     nano \
     protobuf-compiler \
+    iputils-ping \
+    netcat-openbsd \
+    iproute2 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 

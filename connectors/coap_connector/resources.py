@@ -26,6 +26,7 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         self.kafka_producer = kafka_producer
         self.command_consumer = command_consumer
         self.request_count = 0
+        self.path_mapping = {}  # Store path mapping from config
         
         logger.info("🚀 Initializing DataRootResource...")
         
@@ -55,6 +56,12 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                 translator_type = translator_config.get('type')
                 priority = translator_config.get('priority', 999)
                 
+                # Extract and store path_mapping if it exists
+                config_section = translator_config.get('config', {})
+                if 'path_mapping' in config_section:
+                    self.path_mapping = config_section['path_mapping']
+                    logger.info(f"Loaded path mapping: {self.path_mapping}")
+                
                 # Use factory to create translator
                 translator = TranslatorFactory.create_translator(translator_config)
                 if translator:
@@ -78,14 +85,29 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
     def _generate_well_known_core_response(self) -> str:
         """Generate CoAP Link Format response for .well-known/core discovery."""
         # Generate the base data path from config
-        base_path = "/" + "/".join(config.COAP_BASE_DATA_PATH)
+        base_path = "/" + "/".join(config.COAP_BASE_DATA_PATH) if config.COAP_BASE_DATA_PATH else ""
         
         # CoAP Link Format according to RFC 6690
-        # Format: </path>;ct=content-type;rt=resource-type;if=interface
-        resources = [
-            f'<{base_path}>;ct=0;rt="iot.data";title="IoT Data Ingestion Endpoint"',
-            # f'<{base_path}/{{device_id}}>;ct=0;rt="iot.device";title="Device Data Endpoint"'
-        ]
+        # Format: </path>;ct=content-type;rt=resource-type;if=interface;title="description"
+        resources = []
+        
+        # Add base data endpoint
+        if base_path:
+            resources.append(f'<{base_path}>;ct=0;rt="iot.data";title="IoT Data Ingestion Endpoint"')
+        
+        # Add endpoints from path_mapping configuration
+        if self.path_mapping:
+            for short_path, description in self.path_mapping.items():
+                full_path = f"{base_path}/{short_path}" if base_path else f"/{short_path}"
+                # Create resource types based on the description
+                resource_type = f"iot.{description.replace('_', '.')}"
+                title = description.replace('_', ' ').title()
+                resources.append(f'<{full_path}>;ct=0;rt="{resource_type}";title="{title} Endpoint"')
+        else:
+            # Fallback if no path mapping is configured
+            logger.warning("No path mapping configured, using generic endpoint")
+            fallback_path = f"{base_path}/{{device_id}}" if base_path else "/{{device_id}}"
+            resources.append(f'<{fallback_path}>;ct=0;rt="iot.device";title="Device Data Endpoint"')
         
         return ",".join(resources)
 

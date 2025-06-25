@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 from shared.models.common import StandardizedOutput, ValidatedOutput, ErrorMessage
 from preservarium_sdk.infrastructure.sql_repository.sql_datatype_repository import SQLDatatypeRepository
+from preservarium_sdk.domain.model.datatype import DatatypeType
 
 logger = logging.getLogger(__name__)
 
@@ -204,13 +205,13 @@ class Validator:
         
         return all_valid, validation_results, error_messages
         
-    def _validate_type(self, values: List[Any], expected_type: str) -> Tuple[bool, List[Any], List[str]]:
+    def _validate_type(self, values: List[Any], expected_type: Optional[DatatypeType]) -> Tuple[bool, List[Any], List[str]]:
         """
         Validate and convert a list of values to the expected type if possible.
         
         Args:
             values: The list of values to validate and convert
-            expected_type: The expected data type (string, float, integer, boolean)
+            expected_type: The expected data type (DatatypeType enum)
             
         Returns:
             Tuple of (all_valid, converted_values, error_messages)
@@ -234,19 +235,44 @@ class Validator:
                 continue
             
             try:
-                if expected_type.lower() == 'number':
+                if expected_type == DatatypeType.NUMBER:
                     converted_values.append(float(value))
-                elif expected_type.lower() == 'integer':
-                    converted_values.append(int(float(value)))
-                elif expected_type.lower() == 'boolean':
+                elif expected_type == DatatypeType.BOOLEAN:
                     if isinstance(value, bool):
                         converted_values.append(int(value))
                     elif isinstance(value, str):
                         converted_values.append(int(value.lower() in ('true', 'yes', '1')))
                     else:
                         converted_values.append(int(bool(value)))
-                elif expected_type.lower() == 'string':
+                elif expected_type == DatatypeType.STRING:
                     converted_values.append(str(value))
+                elif expected_type == DatatypeType.DATETIME:
+                    # For datetime, we'll keep the original value for now
+                    # Additional datetime parsing logic can be added here if needed
+                    converted_values.append(value)
+                elif expected_type == DatatypeType.LIST:
+                    # For list type, ensure it's a list or convert to list
+                    if isinstance(value, list):
+                        converted_values.append(value)
+                    else:
+                        converted_values.append([value])
+                elif expected_type == DatatypeType.OBJECT:
+                    # For object type, try to parse as JSON if string, otherwise keep as-is
+                    if isinstance(value, str):
+                        try:
+                            converted_values.append(json.loads(value))
+                        except json.JSONDecodeError:
+                            converted_values.append(value)
+                    else:
+                        converted_values.append(value)
+                elif expected_type == DatatypeType.BYTES:
+                    # For bytes type, convert to bytes if possible
+                    if isinstance(value, bytes):
+                        converted_values.append(value)
+                    elif isinstance(value, str):
+                        converted_values.append(value.encode('utf-8'))
+                    else:
+                        converted_values.append(str(value).encode('utf-8'))
                 else:
                     # Default case - no conversion
                     logger.info(f"Using default validation for unrecognized type: {expected_type}")
@@ -293,7 +319,9 @@ class Validator:
         metadata = {
             "datatype_id": str(datatype.id) if hasattr(datatype, 'id') else None,
             "datatype_name": datatype.name if hasattr(datatype, 'name') else None,
+            "datatype_display_name": datatype.display_name if hasattr(datatype, 'display_name') else None,
             "datatype_unit": validation_params.get("unit", None),
+            "datatype_category": str(datatype.category) if hasattr(datatype, 'category') and datatype.category else None,
             "persist": datatype.persist if hasattr(datatype, 'persist') else True,
         }
         

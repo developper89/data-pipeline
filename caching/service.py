@@ -194,13 +194,27 @@ class CacheService:
                 logger.info(f"No meaningful data to cache for device {device_id}")
                 return True  # Consider message without meaningful data as processed (won't retry)
             
-            success = await self.metadata_cache.cache_reading(device_id, validated_output)
+            # Check if index is present - required for the new caching strategy
+            if not validated_output.index:
+                logger.warning(f"No index found for device {device_id}, skipping cache")
+                return True  # Consider message without index as processed (won't retry)
+            
+            # Get category from metadata
+            category = None
+            if validated_output.metadata and "datatype_category" in validated_output.metadata:
+                category = validated_output.metadata["datatype_category"]
+            
+            if not category:
+                logger.warning(f"[{request_id}] No category found in metadata for device {device_id}, index {validated_output.index}, skipping cache")
+                return True  # Consider message without category as processed (won't retry)
+            
+            success = await self.metadata_cache.cache_reading(device_id, validated_output, category)
             
             if success:
-                logger.info(f"Successfully cached complete reading for device {device_id}" +
+                logger.info(f"Successfully cached complete reading for device {device_id}, category {category}" +
                            (f" with request_id {validated_output.request_id}" if hasattr(validated_output, 'request_id') else ""))
             else:
-                logger.error(f"Failed to cache complete reading for device {device_id}")
+                logger.error(f"Failed to cache complete reading for device {device_id}, category {category}")
             
             # Always return True even if caching fails - we don't want to block the pipeline
             # for caching errors, just log them

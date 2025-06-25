@@ -6,22 +6,20 @@ from datetime import datetime
 import json
 from shared.models.common import StandardizedOutput, ValidatedOutput, ErrorMessage
 from preservarium_sdk.infrastructure.sql_repository.sql_datatype_repository import SQLDatatypeRepository
-from preservarium_sdk.infrastructure.sql_repository.sql_field_repository import SQLFieldRepository
 
 logger = logging.getLogger(__name__)
 
 class Validator:
     """
     Validates and normalizes sensor data based on configurable rules
-    stored in the datatypes and datatypes_data tables.
+    stored in the datatypes table.
     """
     
-    def __init__(self, datatype_repository, field_repository):
+    def __init__(self, datatype_repository):
         """
-        Initialize the validator with repositories for accessing validation rules.
+        Initialize the validator with repository for accessing validation rules.
         """
         self.datatype_repository = datatype_repository
-        self.field_repository = field_repository
         
     async def validate_and_normalize(
         self, 
@@ -47,8 +45,8 @@ class Validator:
         """
         errors = []
         
-        # 2. Get validation parameters from datatypes_data
-        validation_params = await self._get_validation_params(datatype_id)
+        # Get validation parameters from datatype object
+        validation_params = self._extract_validation_params(datatype)
         # Values to be processed
         values = standardized_data.values
         
@@ -116,26 +114,37 @@ class Validator:
         
         return None, errors
     
-    async def _get_validation_params(self, datatype_id: str) -> Dict[str, Any]:
+    def _extract_validation_params(self, datatype: Any) -> Dict[str, Any]:
         """
-        Fetches validation parameters from datatypes_data table for a specific datatype.
-        Converts field values to a dictionary for easier access.
+        Extract validation parameters from datatype object.
+        
+        Args:
+            datatype: The datatype model object
+            
+        Returns:
+            Dictionary of validation parameters
         """
         validation_params = {}
+        
         try:
-            # This method needs to be implemented in the datatype repository
-            datatype_data_list = await self.datatype_repository.get_datatype_fields_data(datatype_id)
-            
-            for data_item in datatype_data_list:
-                field_name = data_item.get("field_name")
-                field_value = data_item.get("field_value")
-                if field_name and field_value is not None:
-                    validation_params[field_name] = field_value
-                    
-            logger.debug(f"Fetched validation parameters for datatype {datatype_id}: {validation_params}")
+            # Extract validation parameters from datatype attributes
+            if hasattr(datatype, 'min') and datatype.min is not None:
+                validation_params['min_value'] = datatype.min
+                
+            if hasattr(datatype, 'max') and datatype.max is not None:
+                validation_params['max_value'] = datatype.max
+                
+            if hasattr(datatype, 'parsing_op') and datatype.parsing_op:
+                validation_params['parsing_op'] = datatype.parsing_op
+                
+            if hasattr(datatype, 'unit') and datatype.unit:
+                validation_params['unit'] = datatype.unit
+                
+            logger.debug(f"Extracted validation parameters from datatype: {validation_params}")
             return validation_params
+            
         except Exception as e:
-            logger.error(f"Error fetching validation parameters for datatype {datatype_id}: {e}")
+            logger.error(f"Error extracting validation parameters from datatype: {e}")
             return {}
         
     def _validate_range(self, values: List[Any], validation_params: Dict) -> Tuple[bool, List[bool], List[str]]:
@@ -319,7 +328,7 @@ class Validator:
         if not values:
             return True, [], []
         
-        # Look for the operation parameter - it might be under 'operation' key
+        # Look for the operation parameter - it might be under 'parsing_op' key
         parsing_op = validation_params.get("parsing_op")
         if not parsing_op:
             # No operation to apply

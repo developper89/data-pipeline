@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     protobuf-compiler \
     iputils-ping \
     netcat-openbsd \
+    # libcoap3-bin \
     iproute2 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*

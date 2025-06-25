@@ -9,7 +9,7 @@ from typing import AsyncGenerator
 from shared.db.database import init_db
 from preservarium_sdk.infrastructure.sql_repository.sql_parser_repository import SQLParserRepository
 from preservarium_sdk.infrastructure.sql_repository.sql_datatype_repository import SQLDatatypeRepository
-from preservarium_sdk.infrastructure.sql_repository.sql_field_repository import SQLFieldRepository
+
 from preservarium_sdk.infrastructure.sql_repository.sql_sensor_repository import SQLSensorRepository
 from preservarium_sdk.infrastructure.sql_repository.sql_hardware_repository import SQLHardwareRepository
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,7 +31,8 @@ logging.basicConfig(
 logging.getLogger("kafka").setLevel(logging.WARNING)
 logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO if os.getenv("SQL_DEBUG") else logging.WARNING)
 logging.getLogger("asyncio").setLevel(logging.INFO)
-logging.getLogger("parser_script").setLevel(log_level)
+# logging.getLogger("parser_script").setLevel(log_level)
+logging.getLogger("parser_script").setLevel(logging.DEBUG)
 
 # Create a custom filter to add request_id to log records when available
 class RequestIdFilter(logging.Filter):
@@ -95,14 +96,12 @@ async def manage_service(db_session: AsyncSession) -> AsyncGenerator[NormalizerS
         # Initialize repositories
         parser_repository = SQLParserRepository(db_session)
         datatype_repository = SQLDatatypeRepository(db_session)
-        field_repository = SQLFieldRepository(db_session)
         sensor_repository = SQLSensorRepository(db_session)
         hardware_repository = SQLHardwareRepository(db_session)
         # Create service with all repositories for enhanced validation
         service = NormalizerService(
             parser_repository=parser_repository,
             datatype_repository=datatype_repository,
-            field_repository=field_repository,
             sensor_repository=sensor_repository,
             hardware_repository=hardware_repository
         )

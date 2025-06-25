@@ -225,6 +225,107 @@ class ProtobufMessageParser:
             logger.debug(f"Failed to parse as {message_type}: {e}")
             return False
     
+    def get_field_types(self, message_type: str) -> Dict[str, str]:
+        """
+        Get field type information for a specific message type.
+        
+        Args:
+            message_type: The message type to get field types for (e.g., 'config', 'measurements')
+            
+        Returns:
+            Dict mapping field names to their data type categories
+            ('integer', 'string', 'boolean', 'bytes', 'array', 'object', 'enum')
+        """
+        field_types = {}
+        
+        try:
+            if message_type not in self.proto_modules:
+                logger.warning(f"Message type '{message_type}' not found in loaded proto modules. Available types: {list(self.proto_modules.keys())}")
+                return field_types
+            
+            proto_info = self.proto_modules[message_type]
+            if 'class' not in proto_info:
+                logger.warning(f"No protobuf class found for message type '{message_type}'")
+                return field_types
+                
+            proto_class = proto_info['class']
+            temp_instance = proto_class()
+            
+            if hasattr(temp_instance, 'DESCRIPTOR'):
+                logger.debug(f"Extracting field types for {message_type} from protobuf schema")
+                for field_desc in temp_instance.DESCRIPTOR.fields:
+                    field_types[field_desc.name] = self._get_protobuf_field_type_category(field_desc)
+                logger.debug(f"Extracted field types for {len(field_types)} fields from {message_type} schema")
+            else:
+                logger.warning(f"Protobuf class for {message_type} has no DESCRIPTOR attribute")
+                
+        except Exception as e:
+            logger.error(f"Error extracting field types for {message_type}: {e}")
+            
+        return field_types
+    
+    def get_field_type(self, message_type: str, field_name: str) -> Optional[str]:
+        """
+        Get the data type category for a specific field in a message type.
+        
+        Args:
+            message_type: The message type (e.g., 'config', 'measurements')
+            field_name: The field name to get the type for
+            
+        Returns:
+            String representing the data type category, or None if not found
+        """
+        field_types = self.get_field_types(message_type)
+        return field_types.get(field_name)
+    
+    def _get_protobuf_field_type_category(self, field_desc) -> str:
+        """
+        Convert protobuf field descriptor type to data type categories.
+        Uses google.protobuf.descriptor.FieldDescriptor type constants.
+        
+        Args:
+            field_desc: FieldDescriptor from protobuf message
+            
+        Returns:
+            String representing the data type category
+        """
+        try:
+            from google.protobuf.descriptor import FieldDescriptor
+            
+            # Handle repeated fields
+            if field_desc.label == FieldDescriptor.LABEL_REPEATED:
+                return 'array'
+            
+            # Map protobuf types to our categories
+            type_mapping = {
+                FieldDescriptor.TYPE_DOUBLE: 'integer',
+                FieldDescriptor.TYPE_FLOAT: 'integer', 
+                FieldDescriptor.TYPE_INT64: 'integer',
+                FieldDescriptor.TYPE_UINT64: 'integer',
+                FieldDescriptor.TYPE_INT32: 'integer',
+                FieldDescriptor.TYPE_FIXED64: 'integer',
+                FieldDescriptor.TYPE_FIXED32: 'integer',
+                FieldDescriptor.TYPE_BOOL: 'boolean',
+                FieldDescriptor.TYPE_STRING: 'string',
+                FieldDescriptor.TYPE_BYTES: 'bytes',
+                FieldDescriptor.TYPE_UINT32: 'integer',
+                FieldDescriptor.TYPE_ENUM: 'enum',
+                FieldDescriptor.TYPE_SFIXED32: 'integer',
+                FieldDescriptor.TYPE_SFIXED64: 'integer',
+                FieldDescriptor.TYPE_SINT32: 'integer',
+                FieldDescriptor.TYPE_SINT64: 'integer',
+                FieldDescriptor.TYPE_MESSAGE: 'object'
+            }
+            
+            return type_mapping.get(field_desc.type, 'string')
+            
+        except ImportError:
+            logger.warning("google.protobuf.descriptor not available for field type detection")
+            return 'unknown'
+        except Exception as e:
+            logger.warning(f"Error getting protobuf field type for {field_desc.name}: {e}")
+            return 'unknown'
+
     def cleanup(self):
         """Clean up compiler resources."""
         if self.compiler:

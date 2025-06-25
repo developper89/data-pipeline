@@ -29,9 +29,7 @@ from preservarium_sdk.infrastructure.sql_repository.sql_parser_repository import
 from preservarium_sdk.infrastructure.sql_repository.sql_datatype_repository import (
     SQLDatatypeRepository,
 )
-from preservarium_sdk.infrastructure.sql_repository.sql_field_repository import (
-    SQLFieldRepository,
-)
+
 from preservarium_sdk.infrastructure.sql_repository.sql_sensor_repository import (
     SQLSensorRepository,
 )
@@ -59,13 +57,11 @@ class NormalizerService:
         self, 
         parser_repository: SQLParserRepository,
         datatype_repository: Optional[SQLDatatypeRepository] = None,
-        field_repository: Optional[SQLFieldRepository] = None,
         sensor_repository: Optional[SQLSensorRepository] = None,
         hardware_repository: Optional[SQLHardwareRepository] = None
     ):
         self.parser_repository = parser_repository
         self.datatype_repository = datatype_repository
-        self.field_repository = field_repository
         self.sensor_repository = sensor_repository
         self.hardware_repository = hardware_repository
         self.consumer: Optional[KafkaConsumer] = None
@@ -78,11 +74,11 @@ class NormalizerService:
         
         # Initialize validator if repositories are provided
         self.validator = None
-        if datatype_repository and field_repository:
-            self.validator = Validator(datatype_repository, field_repository)
-            logger.info("Validator initialized with datatype and field repositories")
+        if datatype_repository:
+            self.validator = Validator(datatype_repository)
+            logger.info("Validator initialized with datatype repository")
         else:
-            logger.warning("Validator not initialized - repositories not provided")
+            logger.warning("Validator not initialized - datatype repository not provided")
             
         self._running = False
         self._stop_event = (

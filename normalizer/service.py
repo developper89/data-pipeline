@@ -114,6 +114,23 @@ class NormalizerService:
                 if "request_id" not in job_dict:
                     job_dict["request_id"] = generate_request_id()
                 raw_message = RawMessage(**job_dict)
+
+                # Find the sensor using parameter field
+                sensor = await self.sensor_repository.find_one_by(parameter=raw_message.device_id)
+                if not sensor:
+                    logger.warning(f"[{request_id}] No sensor found with parameter {raw_message.device_id}")
+                    return True
+                
+                if not sensor.recording or not sensor.active:
+                    logger.warning(f"[{request_id}] Sensor {raw_message.device_id} is not recording")
+                    return True
+                
+                
+                # Get the hardware configuration for the sensor
+                hardware_config = await self._get_hardware_configuration(raw_message.device_id, request_id)
+                
+                
+                
                 # if raw_message.device_id == "2207001":
                 #     logger.info(f"raw message device_id : {raw_message.device_id}, payload_hex: {raw_message.payload_hex}")
                 request_id = raw_message.request_id
@@ -274,7 +291,7 @@ class NormalizerService:
                 
                 # Get all datatypes for this device (via hardware association)
                 
-                device_datatypes = await self._get_device_datatypes(raw_message.device_id, request_id)
+                device_datatypes = await self._get_device_datatypes(sensor, request_id)
 
                 if device_datatypes:
                     logger.debug(f"[{request_id}] Found {len(device_datatypes)} datatypes for device {raw_message.device_id}")
@@ -422,7 +439,7 @@ class NormalizerService:
                 # if the error is persistent. Consider alternative alerting/dead-letter queue strategy here.
                 return False  # Indicate failure to process AND failure to publish error
                 
-    async def _get_device_datatypes(self, device_id: str, request_id: Optional[str] = None) -> Dict[str, Any]:
+    async def _get_device_datatypes(self, sensor: dict, request_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Get all datatypes for a device using the sensor repository and datatype repository.
         Returns a dictionary where keys are datatype_index values and values are datatype models.
@@ -436,14 +453,8 @@ class NormalizerService:
         """
         try:
                 
-            # Find the sensor using parameter field
-            sensor = await self.sensor_repository.find_one_by(parameter=device_id)
-            if not sensor:
-                logger.warning(f"[{request_id}] No sensor found with parameter {device_id}")
-                return {}
-                
             # Now get datatypes using the sensor's ID
-            logger.info(f"[{request_id}] Found sensor with ID {sensor.id} for parameter {device_id}")
+            logger.info(f"[{request_id}] Found sensor with ID {sensor.id} for parameter {sensor.parameter}")
             datatypes = await self.datatype_repository.get_sensor_datatypes_ordered(sensor.id)
             
             # Create a map of datatype_index -> datatype
@@ -454,7 +465,7 @@ class NormalizerService:
             
             return datatype_map
         except Exception as e:
-            logger.error(f"[{request_id}] Error fetching datatypes for device {device_id}: {e}")
+            logger.error(f"[{request_id}] Error fetching datatypes for device {sensor.parameter}: {e}")
             return {}
             
     async def _apply_validation(
@@ -491,7 +502,6 @@ class NormalizerService:
                 # Validate against the found datatype - pass the datatype object directly
                 validated_output, validation_errors = await self.validator.validate_and_normalize(
                     device_id=device_id,
-                    datatype_id=str(matching_datatype.id),
                     standardized_data=standardized_data,
                     request_id=request_id,
                     datatype=matching_datatype

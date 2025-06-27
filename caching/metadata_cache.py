@@ -31,9 +31,9 @@ class MetadataCache:
     async def cache_reading(self, device_id: str, reading_data: ValidatedOutput, 
                            category: str, ttl: Optional[int] = None) -> bool:
         """
-        Cache a single reading for a device grouped by category. If the reading has a new request_id
-        for this device+category combination, previous readings for this device+category will be cleared 
-        before adding this one.
+        Cache a single reading for a device grouped by category and index. Only the latest record 
+        for each category+index combination is stored, replacing any previous record with the same 
+        category+index.
         
         Args:
             device_id: The device ID
@@ -52,6 +52,10 @@ class MetadataCache:
             if not category:
                 logger.warning(f"Reading data for device {device_id} has no category")
                 return False
+                
+            if not index:
+                logger.warning(f"Reading data for device {device_id}, category {category} has no index")
+                return False
             
             # Create complete reading data dictionary including values, label, index, and metadata
             complete_reading_data = {
@@ -66,37 +70,21 @@ class MetadataCache:
                 "display_name": self._parse_display_name(reading_data.metadata)
             }
             
-            logger.info(f"Caching complete reading for device {device_id}, category {category}: values={reading_data.values}, label={reading_data.label}, metadata={reading_data.metadata}")
+            logger.info(f"Caching latest reading for device {device_id}, category {category}, index {index}: values={reading_data.values}")
             
-            if not request_id:
-                logger.warning(f"Reading data for device {device_id}, category {category} has no request_id")
-                # Still proceed with caching, but without request tracking
-            else:
-                # Check if this is a new request for this device+category combination
-                current_request_key = f"device:{device_id}:category:{category}:current_request_id"
-                current_request_id = await self.redis_repository.redis_client.get(current_request_key)
-                logger.info(f"Current request_id for device {device_id}, category {category}: {current_request_id}")
-                
-                # If request_id is different, clear previous readings for this device+category
-                if current_request_id is None or current_request_id != request_id:
-                    logger.debug(f"New request_id {request_id} for device {device_id}, category {category}, clearing previous readings")
-                    
-                    # Clear previous readings for this device+category combination
-                    readings_key = f"device:{device_id}:category:{category}:readings"
-                    await self.redis_repository.redis_client.delete(readings_key)
-                    
-                    # Update current request ID for this device+category
-                    await self.redis_repository.redis_client.set(
-                        current_request_key, 
-                        request_id, 
-                        ex=ttl or self.config.metadata_ttl
-                    )
-            
-            # Add complete reading to the device+category readings list
+            # Use Redis hash to store latest reading for each category+index combination
+            # Key structure: device:{device_id}:category:{category}:readings
+            # Hash field: {index} -> JSON of complete_reading_data
             readings_key = f"device:{device_id}:category:{category}:readings"
-            await self.redis_repository.redis_client.rpush(readings_key, json.dumps(complete_reading_data))
             
-            # Set expiration on readings list
+            # Store/update the reading for this specific index
+            await self.redis_repository.redis_client.hset(
+                readings_key, 
+                index, 
+                json.dumps(complete_reading_data)
+            )
+            
+            # Set expiration on readings hash
             await self.redis_repository.redis_client.expire(
                 readings_key, 
                 ttl or self.config.metadata_ttl
@@ -113,45 +101,91 @@ class MetadataCache:
                 ttl or self.config.metadata_ttl
             )
             
-            logger.debug(f"Cached complete reading for device {device_id}, category {category}" + 
+            # Track the latest request_id for this device+category (for logging/debugging)
+            if request_id:
+                current_request_key = f"device:{device_id}:category:{category}:current_request_id"
+                await self.redis_repository.redis_client.set(
+                    current_request_key, 
+                    request_id, 
+                    ex=ttl or self.config.metadata_ttl
+                )
+            
+            logger.debug(f"Cached latest reading for device {device_id}, category {category}, index {index}" + 
                         (f" with request_id {request_id}" if request_id else ""))
             return True
                 
         except Exception as e:
-            logger.error(f"Error caching reading for device {device_id}, category {category}: {str(e)}")
+            logger.error(f"Error caching reading for device {device_id}, category {category}, index {index}: {str(e)}")
             return False
+    
+    async def get_device_reading_by_category_and_index(self, device_id: str, category: str, index: str) -> Optional[Dict[str, Any]]:
+        """
+        Get the latest reading for a specific device, category, and index combination.
+        
+        Args:
+            device_id: The device ID
+            category: The category (e.g., "P", "M", "C", "S")
+            index: The index (e.g., "T", "U", "P_int", etc.)
+        
+        Returns:
+            Latest reading data dictionary for the specific category+index, or None if not found
+        """
+        try:
+            readings_key = f"device:{device_id}:category:{category}:readings"
+            # Get the specific reading for this index
+            reading_json = await self.redis_repository.redis_client.hget(readings_key, index)
+            
+            if not reading_json:
+                logger.debug(f"No reading found for device {device_id}, category {category}, index {index}")
+                return None
+            
+            try:
+                reading = json.loads(reading_json)
+                logger.debug(f"Retrieved latest reading for device {device_id}, category {category}, index {index}")
+                return reading
+            except json.JSONDecodeError:
+                logger.error(f"Error parsing reading JSON for device {device_id}, category {category}, index {index}: {reading_json}")
+                return None
+            
+        except Exception as e:
+            logger.error(f"Error retrieving reading for device {device_id}, category {category}, index {index}: {str(e)}")
+            return None
     
     async def get_device_readings_by_category(self, device_id: str, category: str) -> List[Dict[str, Any]]:
         """
-        Get all complete readings (values, label, index, metadata) for a specific device and category 
-        from the most recent request for that device+category combination.
+        Get all latest readings (values, label, index, metadata) for a specific device and category.
+        Returns the most recent reading for each index within the category.
         
         Args:
             device_id: The device ID
             category: The category (e.g., "P", "M", "C", "S")
         
         Returns:
-            List of complete reading data dictionaries containing values, label, index, metadata, etc.
+            List of latest reading data dictionaries for each index in the category
         """
         try:
             readings_key = f"device:{device_id}:category:{category}:readings"
-            reading_jsons = await self.redis_repository.redis_client.lrange(readings_key, 0, -1)
+            # Get all hash fields (index -> reading_json)
+            reading_hash = await self.redis_repository.redis_client.hgetall(readings_key)
             
-            if not reading_jsons:
+            if not reading_hash:
                 logger.debug(f"No readings found for device {device_id}, category {category}")
                 return []
             
             # Parse JSON strings back to dictionaries
             readings = []
-            for reading_json in reading_jsons:
+            for index, reading_json in reading_hash.items():
                 try:
                     if reading_json:
                         reading = json.loads(reading_json)
                         readings.append(reading)
                 except json.JSONDecodeError:
-                    logger.error(f"Error parsing reading JSON: {reading_json}")
+                    logger.error(f"Error parsing reading JSON for index {index}: {reading_json}")
             
-            logger.debug(f"Retrieved {len(readings)} complete readings for device {device_id}, category {category}")
+            # Sort readings by index for consistent ordering
+            readings.sort(key=lambda x: x.get('index', ''))
+            
+            logger.debug(f"Retrieved {len(readings)} latest readings for device {device_id}, category {category}")
             return readings
             
         except Exception as e:
@@ -265,4 +299,53 @@ class MetadataCache:
         try:
             await self.redis_repository.close()
         except Exception as e:
-            logger.error(f"Error closing cache connection: {str(e)}") 
+            logger.error(f"Error closing cache connection: {str(e)}")
+    
+    async def get_cache_statistics(self) -> Dict[str, Any]:
+        """
+        Get statistics about the cached data.
+        
+        Returns:
+            Dictionary containing cache statistics
+        """
+        try:
+            stats = {}
+            
+            # Get all device IDs
+            device_ids = await self.get_all_device_ids()
+            stats['total_devices'] = len(device_ids)
+            
+            # Get category and index counts
+            category_counts = {}
+            index_counts = {}
+            total_readings = 0
+            
+            for device_id in device_ids:
+                categories = await self.get_device_categories(device_id)
+                for category in categories:
+                    if category not in category_counts:
+                        category_counts[category] = 0
+                    
+                    # Count readings in this category
+                    readings_key = f"device:{device_id}:category:{category}:readings"
+                    reading_count = await self.redis_repository.redis_client.hlen(readings_key)
+                    category_counts[category] += reading_count
+                    total_readings += reading_count
+                    
+                    # Get index details
+                    reading_hash = await self.redis_repository.redis_client.hgetall(readings_key)
+                    for index in reading_hash.keys():
+                        if index not in index_counts:
+                            index_counts[index] = 0
+                        index_counts[index] += 1
+            
+            stats['total_readings'] = total_readings
+            stats['categories'] = category_counts
+            stats['indices'] = index_counts
+            stats['device_ids'] = device_ids
+            
+            return stats
+            
+        except Exception as e:
+            logger.error(f"Error getting cache statistics: {str(e)}")
+            return {} 

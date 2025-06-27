@@ -118,7 +118,7 @@ class EfentoSensorSimulator:
             
         except Exception as e:
             print(f"Warning: Enhanced payload generator failed: {e}")
-            return self._generate_basic_payload()
+            return False
     
     def _generate_basic_payload(self):
         """Generate a basic payload when the generator isn't available"""

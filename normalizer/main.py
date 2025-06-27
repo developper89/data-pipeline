@@ -31,8 +31,8 @@ logging.basicConfig(
 logging.getLogger("kafka").setLevel(logging.WARNING)
 logging.getLogger("sqlalchemy.engine").setLevel(logging.INFO if os.getenv("SQL_DEBUG") else logging.WARNING)
 logging.getLogger("asyncio").setLevel(logging.INFO)
-# logging.getLogger("parser_script").setLevel(log_level)
-logging.getLogger("parser_script").setLevel(logging.DEBUG)
+logging.getLogger("parser_script").setLevel(log_level)
+# logging.getLogger("parser_script").setLevel(logging.DEBUG)
 
 # Create a custom filter to add request_id to log records when available
 class RequestIdFilter(logging.Filter):

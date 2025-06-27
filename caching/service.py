@@ -207,7 +207,7 @@ class CacheService:
             if not category:
                 logger.warning(f"[{request_id}] No category found in metadata for device {device_id}, index {validated_output.index}, skipping cache")
                 return True  # Consider message without category as processed (won't retry)
-            
+
             success = await self.metadata_cache.cache_reading(device_id, validated_output, category)
             
             if success:

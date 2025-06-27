@@ -25,7 +25,6 @@ class Validator:
     async def validate_and_normalize(
         self, 
         device_id: str,
-        datatype_id: str,
         standardized_data: StandardizedOutput,
         request_id: Optional[str] = None,
         datatype: Optional[Any] = None
@@ -307,28 +306,28 @@ class Validator:
         Returns:
             ValidatedOutput object with validated data
         """
-        # Get unit label from datatype if available
-        label = []
-        if standardized_data.label:
-            label = standardized_data.label
-        elif datatype.label:
-            label = json.loads(datatype.label)
+        # Format the label using dedicated function
+        label = self._format_label(standardized_data, datatype)
         
         # Build metadata with validation info
         # Always create base metadata
         metadata = {
             "datatype_id": str(datatype.id) if hasattr(datatype, 'id') else None,
             "datatype_name": datatype.name if hasattr(datatype, 'name') else None,
-            "datatype_display_name": datatype.display_name if hasattr(datatype, 'display_name') else None,
             "datatype_unit": validation_params.get("unit", None),
+            "datatype_type": str(datatype.data_type) if hasattr(datatype, 'data_type') and datatype.data_type else None,
             "datatype_category": str(datatype.category) if hasattr(datatype, 'category') and datatype.category else None,
             "persist": datatype.persist if hasattr(datatype, 'persist') else True,
         }
         
-        # Conditionally merge standardized_data.metadata if it exists and has content
+                # Conditionally merge standardized_data.metadata if it exists and has content
         if standardized_data.metadata and len(standardized_data.metadata) > 0:
             metadata.update(standardized_data.metadata)
             
+        # Process display name replacement
+        metadata["datatype_display_name"] = self._process_display_name_replacement(metadata, datatype)
+        
+        logger.info(f"Metadata: {metadata}")
         # Create ValidatedOutput for internal tracking (no metadata)
         validated_output = ValidatedOutput(
             device_id=device_id,
@@ -396,3 +395,81 @@ class Validator:
             return False, values, error_messages
         
         return success, parsed_values, error_messages
+
+    def _process_display_name_replacement(self, metadata: Dict[str, Any], datatype: Any) -> List[str]:
+        """
+        Process display name replacement by replacing %name% placeholders with actual datatype display names.
+        
+        Args:
+            metadata: Dictionary containing metadata that may have display_name with placeholders
+            datatype: The datatype object containing display_name as JSON string
+            
+        Returns:
+            List of processed display names (always returns a list, even if empty)
+        """
+        # Replace %name% placeholder in display_name with datatype.display_name
+        if "display_name" in metadata and "%name%" in str(metadata["display_name"]):
+            # Parse datatype.display_name from JSON string to list
+            try:
+                datatype_display_names = json.loads(datatype.display_name) if hasattr(datatype, 'display_name') and datatype.display_name else []
+            except (json.JSONDecodeError, TypeError):
+                datatype_display_names = []
+            
+            # Handle list replacement - both should be lists with matching indexes
+            if isinstance(metadata["display_name"], list) and isinstance(datatype_display_names, list):
+                updated_display_names = []
+                for i, template in enumerate(metadata["display_name"]):
+                    if i < len(datatype_display_names):
+                        replacement = datatype_display_names[i] if datatype_display_names[i] else ""
+                        updated_display_names.append(str(template).replace("%name%", replacement))
+                    else:
+                        # No corresponding datatype display name, remove placeholder
+                        updated_display_names.append(str(template).replace("%name%", ""))
+                return updated_display_names
+            else:
+                # Fallback: treat as string replacement
+                datatype_display_name = datatype_display_names[0] if datatype_display_names else ""
+                return [str(metadata["display_name"]).replace("%name%", datatype_display_name)]
+        else:
+            # No placeholder, just use the original datatype.display_name
+            try:
+                parsed_names = json.loads(datatype.display_name) if hasattr(datatype, 'display_name') and datatype.display_name else []
+                # Ensure we always return a list
+                if isinstance(parsed_names, list):
+                    return [str(name) for name in parsed_names]  # Convert all to strings
+                else:
+                    return [str(parsed_names)] if parsed_names is not None else []
+            except (json.JSONDecodeError, TypeError):
+                display_name = datatype.display_name if hasattr(datatype, 'display_name') else None
+                return [str(display_name)] if display_name is not None else []
+
+    def _format_label(self, standardized_data: Optional[StandardizedOutput], datatype: Any) -> List[str]:
+        """
+        Format and return the label list from standardized_data or datatype.
+        
+        Args:
+            standardized_data: Optional StandardizedOutput object containing label
+            datatype: The datatype object containing label as JSON string
+            
+        Returns:
+            List of label strings (always returns a list, even if empty)
+        """
+        # Get unit label from standardized_data first, then datatype if needed
+        if standardized_data and standardized_data.label is not None:
+            # Ensure it's a list of strings
+            if isinstance(standardized_data.label, list):
+                return [str(item) for item in standardized_data.label]
+            else:
+                return [str(standardized_data.label)]
+        elif hasattr(datatype, 'label') and datatype.label:
+            try:
+                parsed_label = json.loads(datatype.label)
+                # Ensure it's always a list of strings
+                if isinstance(parsed_label, list):
+                    return [str(item) for item in parsed_label]
+                else:
+                    return [str(parsed_label)] if parsed_label is not None else []
+            except (json.JSONDecodeError, TypeError):
+                return []
+        
+        return []

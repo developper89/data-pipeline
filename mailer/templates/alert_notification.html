@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Alert Notification</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        line-height: 1.6;
+        color: #333;
+        max-width: 600px;
+        margin: 0 auto;
+        padding: 20px;
+      }
+      .header {
+        background-color: #dc3545;
+        color: white;
+        padding: 20px;
+        text-align: center;
+        border-radius: 8px 8px 0 0;
+      }
+      .content {
+        background-color: #f8f9fa;
+        padding: 20px;
+        border-radius: 0 0 8px 8px;
+        border: 1px solid #dee2e6;
+      }
+      .alert-high {
+        border-left: 4px solid #dc3545;
+      }
+      .alert-medium {
+        border-left: 4px solid #fd7e14;
+      }
+      .alert-low {
+        border-left: 4px solid #ffc107;
+      }
+      .alert-info {
+        border-left: 4px solid #17a2b8;
+      }
+      .alert-box {
+        padding: 15px;
+        margin: 15px 0;
+        border-radius: 4px;
+        background-color: white;
+      }
+      .details table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 15px;
+      }
+      .details th,
+      .details td {
+        padding: 8px 12px;
+        text-align: left;
+        border-bottom: 1px solid #dee2e6;
+      }
+      .details th {
+        background-color: #e9ecef;
+        font-weight: bold;
+      }
+      .footer {
+        margin-top: 20px;
+        padding-top: 15px;
+        border-top: 1px solid #dee2e6;
+        font-size: 12px;
+        color: #6c757d;
+        text-align: center;
+      }
+      .button {
+        display: inline-block;
+        padding: 10px 20px;
+        background-color: #007bff;
+        color: white;
+        text-decoration: none;
+        border-radius: 4px;
+        margin-top: 15px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="header">
+      <h1>🚨 Alert Notification</h1>
+      <p>{{ alert.alarm_name }}</p>
+    </div>
+
+    <div class="content">
+      <div class="alert-box alert-{{ alert.level.lower() }}">
+        <h2>{{ alert.message }}</h2>
+        <p><strong>Device:</strong> {{ alert.device_id }}</p>
+        <p><strong>Severity:</strong> {{ alert.level }}</p>
+      </div>
+
+      <div class="details">
+        <h3>Alert Details</h3>
+        <table>
+          <tr>
+            <th>Alert ID</th>
+            <td>{{ alert.alert_id }}</td>
+          </tr>
+          <tr>
+            <th>Device ID</th>
+            <td>{{ alert.device_id }}</td>
+          </tr>
+          <tr>
+            <th>Sensor ID</th>
+            <td>{{ alert.sensor_id }}</td>
+          </tr>
+          <tr>
+            <th>Alert Type</th>
+            <td>{{ alert.alarm_type }}</td>
+          </tr>
+          <tr>
+            <th>Field</th>
+            <td>{{ alert.field_name }}</td>
+          </tr>
+          <tr>
+            <th>Trigger Value</th>
+            <td>{{ alert.trigger_value }}</td>
+          </tr>
+          <tr>
+            <th>Threshold</th>
+            <td>{{ alert.threshold }} ({{ alert.math_operator }})</td>
+          </tr>
+          <tr>
+            <th>Triggered At</th>
+            <td>{{ alert.triggered_at }}</td>
+          </tr>
+        </table>
+      </div>
+    </div>
+
+    <div class="footer">
+      <p>This is an automated alert from the Preservarium monitoring system.</p>
+      <p>Please do not reply to this email.</p>
+    </div>
+  </body>
+</html>

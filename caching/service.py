@@ -74,6 +74,28 @@ class CacheService:
                 logger.error("Failed to create Kafka consumer")
                 return False
                 
+            # For caching service, we only want latest messages - seek to end of all partitions
+            logger.info("Seeking to end of all partitions to ignore backlog (cache service only needs latest data)")
+            
+            # Wait for partition assignment before seeking to end
+            max_wait_time = 30  # Maximum wait time in seconds
+            wait_start = asyncio.get_event_loop().time()
+            
+            while not self.consumer.assignment():
+                if asyncio.get_event_loop().time() - wait_start > max_wait_time:
+                    logger.error("Timeout waiting for partition assignment")
+                    return False
+                    
+                # Poll to trigger partition assignment
+                self.consumer.poll(timeout_ms=100)
+                await asyncio.sleep(0.1)
+            
+            # Now that partitions are assigned, seek to end
+            assigned_partitions = self.consumer.assignment()
+            logger.info(f"Partitions assigned: {assigned_partitions}")
+            self.consumer.seek_to_end()  # Seek to end of all assigned partitions
+            logger.info("Successfully seeked to end of all partitions")
+            
             logger.info(f"Successfully subscribed to topic: {config.KAFKA_VALIDATED_DATA_TOPIC}")
         except Exception as e:
             logger.error(f"Failed to initialize Kafka consumer: {str(e)}")
@@ -190,7 +212,7 @@ class CacheService:
                 return True  # Consider missing device_id as processed (won't retry)
             
             # Only cache if data exists and is not empty
-            if not any([validated_output.values, validated_output.label, validated_output.index, validated_output.metadata]):
+            if not any([validated_output.values, validated_output.labels, validated_output.index, validated_output.metadata]):
                 logger.info(f"No meaningful data to cache for device {device_id}")
                 return True  # Consider message without meaningful data as processed (won't retry)
             

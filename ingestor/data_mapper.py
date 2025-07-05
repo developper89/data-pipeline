@@ -44,9 +44,30 @@ class DataMapper:
             # Prepare fields (actual measurement values)
             fields = {}
             
-            # Process the values
+            # Get persist flags from metadata
+            metadata = validated_data.metadata or {}
+            persist_flags = metadata.get("persist", [])
+            
+            # Process the values - only include values that should be persisted
             for i, value in enumerate(values):
-                field_name = validated_data.label[i]
+                # Check if this value should be persisted (persist_flags is always a list)
+                should_persist = True  # Default to True if no flag specified
+                if i < len(persist_flags):
+                    should_persist = persist_flags[i]
+                
+                # Skip values that shouldn't be persisted
+                if not should_persist:
+                    logger.debug(f"Skipping value at index {i} for device {device_id} (persist=False)")
+                    continue
+                
+                # Get field name from labels
+                field_name = None
+                if validated_data.labels and i < len(validated_data.labels):
+                    field_name = validated_data.labels[i]
+                else:
+                    field_name = f"value_{i}"  # Fallback field name
+                
+                # Add value to fields if it should be persisted
                 if isinstance(value, (int, float)):
                     fields[field_name] = value
                 elif isinstance(value, str):
@@ -56,10 +77,19 @@ class DataMapper:
                     except ValueError:
                         # Keep string values as is
                         fields[field_name] = value
+                else:
+                    # Handle other data types (bool, etc.)
+                    fields[field_name] = value
                     
-            # Skip if no fields
+            # Skip if no fields (either no values or all values have persist=False)
             if not fields:
-                logger.warning(f"No valid fields found in message for device {device_id}")
+                # Check if it's because all values were filtered out by persistence
+                has_non_persistent_values = any(not flag for flag in persist_flags[:len(values)]) if persist_flags else False
+                    
+                if has_non_persistent_values:
+                    logger.info(f"No fields created for device {device_id} - all values have persist=False")
+                else:
+                    logger.warning(f"No valid fields found in message for device {device_id}")
                 return []
                 
             # Create InfluxDB point

@@ -7,7 +7,7 @@ from kafka.errors import KafkaError
 
 # Import shared components
 from shared.mq.kafka_helpers import publish_message # Use the generic helper
-from shared.models.common import ErrorMessage, ValidatedOutput
+from shared.models.common import ErrorMessage, ValidatedOutput, AlertMessage, AlarmMessage
 
 # Import local config
 import config
@@ -89,6 +89,74 @@ class NormalizerKafkaProducer:
             raise # Re-raise Kafka specific errors
         except Exception as e:
             logger.exception(f"[{message.request_id}] Unexpected error publishing ErrorMessage to Kafka topic '{topic}': {e}")
+            raise # Re-raise other errors
+
+    def publish_alert(self, message: AlertMessage):
+        """
+        Publishes an AlertMessage to the configured alerts topic.
+
+        Args:
+            message: The AlertMessage object to publish.
+
+        Raises:
+            KafkaError: If publishing fails due to Kafka-related issues.
+            Exception: For other unexpected publishing errors.
+        """
+        if not isinstance(message, AlertMessage):
+            raise TypeError("Message must be an instance of AlertMessage")
+
+        if not config.KAFKA_ALERTS_TOPIC:
+            logger.warning(f"[{message.request_id}] KAFKA_ALERTS_TOPIC not configured. Skipping alert publication.")
+            return # Don't raise an error, just skip if not configured
+
+        try:
+            # Use sensor_id as the key for partitioning alerts
+            key = message.sensor_id
+            topic = config.KAFKA_ALERTS_TOPIC
+            value = message.model_dump()
+
+            logger.debug(f"[{message.request_id}] Publishing AlertMessage to topic '{topic}' with key '{key}'")
+            publish_message(self.producer, topic, value, key)
+            logger.info(f"[{message.request_id}] Successfully published alert {message.alert_id} for alarm '{message.alarm_name}' to topic '{topic}'")
+        except KafkaError as e:
+            logger.error(f"[{message.request_id}] Failed to publish AlertMessage to Kafka topic '{topic}': {e}")
+            raise # Re-raise Kafka specific errors
+        except Exception as e:
+            logger.exception(f"[{message.request_id}] Unexpected error publishing AlertMessage to Kafka topic '{topic}': {e}")
+            raise # Re-raise other errors
+
+    def publish_alarm(self, message: AlarmMessage):
+        """
+        Publishes an AlarmMessage to the configured alarms topic.
+
+        Args:
+            message: The AlarmMessage object to publish.
+
+        Raises:
+            KafkaError: If publishing fails due to Kafka-related issues.
+            Exception: For other unexpected publishing errors.
+        """
+        if not isinstance(message, AlarmMessage):
+            raise TypeError("Message must be an instance of AlarmMessage")
+
+        if not config.KAFKA_ALARMS_TOPIC:
+            logger.warning(f"[{message.request_id}] KAFKA_ALARMS_TOPIC not configured. Skipping alarm publication.")
+            return # Don't raise an error, just skip if not configured
+
+        try:
+            # Use alarm_id as the key for partitioning alarms
+            key = message.alarm_id
+            topic = config.KAFKA_ALARMS_TOPIC
+            value = message.model_dump()
+
+            logger.debug(f"[{message.request_id}] Publishing AlarmMessage to topic '{topic}' with key '{key}'")
+            publish_message(self.producer, topic, value, key)
+            logger.info(f"[{message.request_id}] Successfully published alarm {message.alarm_id} '{message.alarm_name}' to topic '{topic}'")
+        except KafkaError as e:
+            logger.error(f"[{message.request_id}] Failed to publish AlarmMessage to Kafka topic '{topic}': {e}")
+            raise # Re-raise Kafka specific errors
+        except Exception as e:
+            logger.exception(f"[{message.request_id}] Unexpected error publishing AlarmMessage to Kafka topic '{topic}': {e}")
             raise # Re-raise other errors
 
     def close(self, timeout: Optional[float] = None):

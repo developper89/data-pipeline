@@ -74,7 +74,8 @@ class StandardizedOutput(CustomBaseModel):
     """
     device_id: str
     values: List[Any]
-    label: Optional[List[str]] = None
+    labels: Optional[List[str]] = None
+    display_names: Optional[List[str]] = None
     index: str = ""
     metadata: Optional[Dict[str, Any]] = None
 
@@ -85,6 +86,51 @@ class ValidatedOutput(CustomBaseModel):
     """
     device_id: str
     values: List[Any]
-    label: Optional[List[str]] = None
+    labels: Optional[List[str]] = None
+    display_names: Optional[List[str]] = None
     index: str = ""
     metadata: Optional[Dict[str, Any]] = None
+
+class AlarmMessage(BaseMessage):
+    """
+    Represents an alarm configuration discovered and published to Kafka.
+    Published when a new alarm is found or when alarm configuration changes.
+    """
+    alarm_id: str = Field(..., description="UUID of the alarm")
+    sensor_id: str = Field(..., description="UUID of the sensor this alarm monitors")
+    device_id: str = Field(..., description="Device ID parameter of the sensor")
+    datatype_id: str = Field(..., description="UUID of the datatype this alarm monitors")
+    alarm_name: str = Field(..., description="Name of the alarm")
+    description: str = Field(..., description="Description of the alarm")
+    alarm_type: str = Field(..., description="Type of alarm (Status, Measure)")
+    field_name: str = Field(..., description="Field name being monitored")
+    threshold: float = Field(..., description="Threshold value for triggering")
+    math_operator: str = Field(..., description="Mathematical operator (>, <, ==, etc.)")
+    level: int = Field(..., description="Alarm severity level")
+    active: bool = Field(..., description="Whether the alarm is currently active")
+    user_id: str = Field(..., description="UUID of the user who created the alarm")
+    recipients: Optional[str] = Field(None, description="Comma-separated list of recipients")
+    notify_creator: bool = Field(True, description="Whether to notify the alarm creator")
+    created_at: datetime = Field(..., description="When the alarm was created")
+    updated_at: datetime = Field(..., description="When the alarm was last updated")
+
+class AlertMessage(BaseMessage):
+    """
+    Represents an alert triggered by an alarm condition.
+    Published to Kafka when alarm thresholds are exceeded.
+    """
+    alert_id: str = Field(..., description="UUID of the created alert")
+    alarm_id: str = Field(..., description="UUID of the alarm that triggered this alert")
+    sensor_id: str = Field(..., description="UUID of the sensor that triggered the alarm")
+    device_id: str = Field(..., description="Device ID parameter of the sensor")
+    alarm_name: str = Field(..., description="Name of the alarm")
+    alarm_type: str = Field(..., description="Type of alarm (Status, Measure)")
+    field_name: str = Field(..., description="Field name that was monitored")
+    trigger_value: float = Field(..., description="Value that triggered the alarm")
+    threshold: float = Field(..., description="Threshold value that was exceeded")
+    math_operator: str = Field(..., description="Mathematical operator used (>, <, ==, etc.)")
+    level: int = Field(..., description="Alarm severity level")
+    message: str = Field(..., description="Human-readable alert message")
+    triggered_at: datetime = Field(..., description="When the alert was triggered")
+    recipients: Optional[str] = Field(None, description="Comma-separated list of recipients")
+    notify_creator: bool = Field(True, description="Whether to notify the alarm creator")

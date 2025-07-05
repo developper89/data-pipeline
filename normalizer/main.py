@@ -9,9 +9,10 @@ from typing import AsyncGenerator
 from shared.db.database import init_db
 from preservarium_sdk.infrastructure.sql_repository.sql_parser_repository import SQLParserRepository
 from preservarium_sdk.infrastructure.sql_repository.sql_datatype_repository import SQLDatatypeRepository
-
 from preservarium_sdk.infrastructure.sql_repository.sql_sensor_repository import SQLSensorRepository
 from preservarium_sdk.infrastructure.sql_repository.sql_hardware_repository import SQLHardwareRepository
+from preservarium_sdk.infrastructure.sql_repository.sql_alarm_repository import SQLAlarmRepository
+from preservarium_sdk.infrastructure.sql_repository.sql_alert_repository import SQLAlertRepository
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Ensure other local modules are importable if running as main
@@ -98,12 +99,16 @@ async def manage_service(db_session: AsyncSession) -> AsyncGenerator[NormalizerS
         datatype_repository = SQLDatatypeRepository(db_session)
         sensor_repository = SQLSensorRepository(db_session)
         hardware_repository = SQLHardwareRepository(db_session)
-        # Create service with all repositories for enhanced validation
+        alarm_repository = SQLAlarmRepository(db_session)
+        alert_repository = SQLAlertRepository(db_session)
+        # Create service with all repositories for enhanced validation and alarm handling
         service = NormalizerService(
             parser_repository=parser_repository,
             datatype_repository=datatype_repository,
             sensor_repository=sensor_repository,
-            hardware_repository=hardware_repository
+            hardware_repository=hardware_repository,
+            alarm_repository=alarm_repository,
+            alert_repository=alert_repository
         )
         
         yield service

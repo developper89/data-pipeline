@@ -61,23 +61,23 @@ class MetadataCache:
             complete_reading_data = {
                 "device_id": reading_data.device_id,
                 "values": reading_data.values,
-                "label": reading_data.label,
+                "labels": reading_data.labels,
+                "display_names": reading_data.display_names,
                 "index": reading_data.index,
                 "metadata": reading_data.metadata,
                 "timestamp": reading_data.timestamp.isoformat() if reading_data.timestamp else None,
                 "request_id": reading_data.request_id,
                 "category": category,
-                "display_name": self._parse_display_name(reading_data.metadata)
             }
             
             logger.info(f"Caching latest reading for device {device_id}, category {category}, index {index}: values={reading_data.values}")
             
             # Use Redis hash to store latest reading for each category+index combination
             # Key structure: device:{device_id}:category:{category}:readings
-            # Hash field: {index} -> JSON of complete_reading_data
+            # Hash field: {index} -> JSON object containing the reading data directly
             readings_key = f"device:{device_id}:category:{category}:readings"
             
-            # Store/update the reading for this specific index
+            # Store the reading data directly under the index key
             await self.redis_repository.redis_client.hset(
                 readings_key, 
                 index, 
@@ -128,11 +128,11 @@ class MetadataCache:
             index: The index (e.g., "T", "U", "P_int", etc.)
         
         Returns:
-            Latest reading data dictionary for the specific category+index, or None if not found
+            Reading data dictionary, or None if not found
         """
         try:
             readings_key = f"device:{device_id}:category:{category}:readings"
-            # Get the specific reading for this index
+            # Get the reading data directly from the index key
             reading_json = await self.redis_repository.redis_client.hget(readings_key, index)
             
             if not reading_json:
@@ -141,8 +141,15 @@ class MetadataCache:
             
             try:
                 reading = json.loads(reading_json)
-                logger.debug(f"Retrieved latest reading for device {device_id}, category {category}, index {index}")
+                
+                # Ensure we have a valid reading dictionary
+                if not isinstance(reading, dict):
+                    logger.warning(f"Invalid reading format for device {device_id}, category {category}, index {index}")
+                    return None
+                
+                logger.debug(f"Retrieved reading for device {device_id}, category {category}, index {index}")
                 return reading
+                
             except json.JSONDecodeError:
                 logger.error(f"Error parsing reading JSON for device {device_id}, category {category}, index {index}: {reading_json}")
                 return None
@@ -151,42 +158,47 @@ class MetadataCache:
             logger.error(f"Error retrieving reading for device {device_id}, category {category}, index {index}: {str(e)}")
             return None
     
+
     async def get_device_readings_by_category(self, device_id: str, category: str) -> List[Dict[str, Any]]:
         """
         Get all latest readings (values, label, index, metadata) for a specific device and category.
-        Returns the most recent reading for each index within the category.
+        Returns a list of all reading data dictionaries for all indexes in the category.
         
         Args:
             device_id: The device ID
             category: The category (e.g., "P", "M", "C", "S")
         
         Returns:
-            List of latest reading data dictionaries for each index in the category
+            List of all reading data dictionaries for all indexes in the category
         """
         try:
             readings_key = f"device:{device_id}:category:{category}:readings"
-            # Get all hash fields (index -> reading_json)
+            # Get all hash fields (index -> reading_data)
             reading_hash = await self.redis_repository.redis_client.hgetall(readings_key)
             
             if not reading_hash:
                 logger.debug(f"No readings found for device {device_id}, category {category}")
                 return []
             
-            # Parse JSON strings back to dictionaries
-            readings = []
+            # Parse JSON strings and collect all readings
+            all_readings = []
             for index, reading_json in reading_hash.items():
                 try:
                     if reading_json:
-                        reading = json.loads(reading_json)
-                        readings.append(reading)
+                        reading_data = json.loads(reading_json)
+                        
+                        # Process the direct reading format
+                        if isinstance(reading_data, dict):
+                            all_readings.append(reading_data)
+                        
                 except json.JSONDecodeError:
                     logger.error(f"Error parsing reading JSON for index {index}: {reading_json}")
             
-            # Sort readings by index for consistent ordering
-            readings.sort(key=lambda x: x.get('index', ''))
+            # Sort readings by label for consistent ordering
+            # all_readings.sort(key=lambda x: x.get('labels', [''])[0] if x.get('labels') else x.get('index', ''))
             
-            logger.debug(f"Retrieved {len(readings)} latest readings for device {device_id}, category {category}")
-            return readings
+            logger.debug(f"Retrieved {len(all_readings)} total readings for device {device_id}, category {category}")
+            return all_readings
             
         except Exception as e:
             logger.error(f"Error retrieving readings for device {device_id}, category {category}: {str(e)}")
@@ -256,42 +268,7 @@ class MetadataCache:
             logger.error(f"Error retrieving all device IDs: {str(e)}")
             return []
     
-    def _parse_display_name(self, metadata: Optional[Dict[str, Any]]) -> Optional[List[str]]:
-        """
-        Parse display_name from metadata JSON string to Python list.
-        
-        Args:
-            metadata: The metadata dictionary containing datatype_display_name
-            
-        Returns:
-            List of display names or None if not available/parseable
-        """
-        if not metadata or not metadata.get("datatype_display_name"):
-            return None
-            
-        display_name_raw = metadata.get("datatype_display_name")
-        
-        # If it's already a list, return as is
-        if isinstance(display_name_raw, list):
-            return display_name_raw
-            
-        # If it's a string, try to parse as JSON
-        if isinstance(display_name_raw, str):
-            try:
-                parsed = json.loads(display_name_raw)
-                # Ensure it's a list
-                if isinstance(parsed, list):
-                    return parsed
-                else:
-                    logger.warning(f"Parsed display_name is not a list: {type(parsed)}")
-                    return None
-            except (json.JSONDecodeError, TypeError) as e:
-                logger.warning(f"Failed to parse display_name JSON: {display_name_raw}, error: {e}")
-                return None
-                
-        logger.warning(f"Unexpected display_name type: {type(display_name_raw)}")
-        return None
-    
+
     async def close(self) -> None:
         """
         Close the cache connection.
@@ -315,9 +292,10 @@ class MetadataCache:
             device_ids = await self.get_all_device_ids()
             stats['total_devices'] = len(device_ids)
             
-            # Get category and index counts
+            # Get category and index counts  
             category_counts = {}
             index_counts = {}
+            label_counts = {}
             total_readings = 0
             
             for device_id in device_ids:
@@ -326,22 +304,38 @@ class MetadataCache:
                     if category not in category_counts:
                         category_counts[category] = 0
                     
-                    # Count readings in this category
+                    # Get readings hash for this category
                     readings_key = f"device:{device_id}:category:{category}:readings"
-                    reading_count = await self.redis_repository.redis_client.hlen(readings_key)
-                    category_counts[category] += reading_count
-                    total_readings += reading_count
-                    
-                    # Get index details
                     reading_hash = await self.redis_repository.redis_client.hgetall(readings_key)
-                    for index in reading_hash.keys():
+                    
+                    for index, reading_json in reading_hash.items():
                         if index not in index_counts:
                             index_counts[index] = 0
                         index_counts[index] += 1
+                        
+                        try:
+                            reading_data = json.loads(reading_json)
+                            
+                            # Process the direct reading format
+                            if isinstance(reading_data, dict):
+                                category_counts[category] += 1
+                                total_readings += 1
+                                
+                                # Count by individual labels within the reading
+                                labels = reading_data.get('label', [])
+                                if isinstance(labels, list):
+                                    for label in labels:
+                                        if label not in label_counts:
+                                            label_counts[label] = 0
+                                        label_counts[label] += 1
+                                    
+                        except json.JSONDecodeError:
+                            logger.warning(f"Invalid JSON in reading for {device_id}:{category}:{index}")
             
             stats['total_readings'] = total_readings
             stats['categories'] = category_counts
             stats['indices'] = index_counts
+            stats['labels'] = label_counts  # Now tracks individual sensor labels like T_ext, T_int, etc.
             stats['device_ids'] = device_ids
             
             return stats

@@ -12,17 +12,17 @@ services:
       context: .
       dockerfile: manager/Dockerfile
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock  # Allow Docker-in-Docker
+      - /var/run/docker.sock:/var/run/docker.sock # Allow Docker-in-Docker
       - ./manager:/app/manager
       - ./shared:/app/shared
     environment:
       - CONFIG_PATH=/app/manager/connectors_config.yaml
-      - HOST_SHARED_PATH=${PWD}/shared  # Absolute path to shared directory on host
+      - HOST_SHARED_PATH=${PWD}/shared # Absolute path to shared directory on host
     networks:
       - preservarium_net
     depends_on:
       - kafka
-  
+
   normalizer:
     container_name: normalizer
     build:
@@ -39,6 +39,8 @@ services:
       - KAFKA_RAW_DATA_TOPIC=iot_raw_data
       - KAFKA_VALIDATED_DATA_TOPIC=iot_validated_data
       - KAFKA_ERROR_TOPIC=iot_errors
+      - KAFKA_ALERTS_TOPIC=iot_alerts
+      - KAFKA_ALARMS_TOPIC=iot_alarms
       - KAFKA_CONSUMER_GROUP_ID=normalizer_group
       - KAFKA_CONSUMER_POLL_TIMEOUT_S=1.0
       # Database Configuration
@@ -113,6 +115,47 @@ services:
       - kafka
       - redis
 
+  mailer:
+    container_name: mailer
+    build:
+      context: .
+      dockerfile: mailer/Dockerfile
+    volumes:
+      - ./mailer:/app/mailer
+      - ./shared:/app/shared
+      - ./mailer/templates:/app/templates
+    environment:
+      # Kafka Configuration
+      - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
+      - KAFKA_ALERTS_TOPIC=iot_alerts
+      - KAFKA_ERROR_TOPIC=iot_errors
+      - KAFKA_CONSUMER_GROUP_ID=mailer_group
+      - KAFKA_CONSUMER_POLL_TIMEOUT_S=1.0
+      # SMTP Configuration
+      - SMTP_HOST=${SMTP_HOST:-smtp.gmail.com}
+      - SMTP_PORT=${SMTP_PORT:-587}
+      - SMTP_USERNAME=${SMTP_USERNAME}
+      - SMTP_PASSWORD=${SMTP_PASSWORD}
+      - SMTP_USE_TLS=${SMTP_USE_TLS:-true}
+      - SMTP_USE_SSL=${SMTP_USE_SSL:-false}
+      - SMTP_FROM_EMAIL=${SMTP_FROM_EMAIL:-alerts@preservarium.com}
+      - SMTP_FROM_NAME=${SMTP_FROM_NAME:-Preservarium Alert System}
+      # Email Template Configuration
+      - EMAIL_TEMPLATE_DIR=/app/templates
+      - DEFAULT_EMAIL_TEMPLATE=alert_notification.html
+      # Service Configuration
+      - LOG_LEVEL=INFO
+      - MAX_RETRY_ATTEMPTS=3
+      - RETRY_DELAY_SECONDS=5
+      - EMAIL_RATE_LIMIT_PER_MINUTE=60
+      - EMAIL_BATCH_SIZE=10
+      # Database Configuration (for logging)
+      - DATABASE_URL=postgresql://postgres:preservarium@postgres:5432/preservarium
+    networks:
+      - preservarium_net
+    depends_on:
+      - kafka
+
   influxdb:
     image: influxdb:2.6
     container_name: influxdb
@@ -137,7 +180,14 @@ services:
       - "6379:6379"
     volumes:
       - redis-data:/data
-    command: ["redis-server", "--appendonly", "yes", "--requirepass", "${REDIS_PASSWORD:-preservarium-redis}"]
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--requirepass",
+        "${REDIS_PASSWORD:-preservarium-redis}",
+      ]
     networks:
       - preservarium_net
 
@@ -163,8 +213,8 @@ services:
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
       KAFKA_NUM_PARTITIONS: 3
     ports:
-      - "29092:29092"  # External access port
+      - "29092:29092" # External access port
 
 volumes:
   influxdb-data:
-  redis-data: 
+  redis-data:

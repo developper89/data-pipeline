@@ -168,15 +168,8 @@ class IngestorService:
                 logger.error(f"[{request_id}] Invalid ValidatedOutput format: {str(e)}")
                 return True  # Consider invalid message as processed (won't retry)
             
-            # Check the persist field in metadata - skip if persist is False
-            metadata = validated_output.metadata
-            should_persist = metadata.get("persist", False)  # Default to True if not specified
-            
-            if not should_persist:
-                logger.info(f"[{request_id}] Skipping data for device {validated_output.device_id} as persist=False, data: {validated_output.label}")
-                return True  # Message processed successfully (by skipping)
-                
             # Map data to InfluxDB points - pass the validated_output object directly
+            # Note: The data_mapper will handle per-value persistence filtering
             points = self.data_mapper.map_data(validated_output)
             if not points:
                 logger.warning(f"[{request_id}] No valid points mapped from message, skipping")

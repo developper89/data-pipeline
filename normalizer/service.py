@@ -36,12 +36,18 @@ from preservarium_sdk.infrastructure.sql_repository.sql_sensor_repository import
 from preservarium_sdk.infrastructure.sql_repository.sql_hardware_repository import (
     SQLHardwareRepository,
 )
-
+from preservarium_sdk.infrastructure.sql_repository.sql_alarm_repository import (
+    SQLAlarmRepository,
+)
+from preservarium_sdk.infrastructure.sql_repository.sql_alert_repository import (
+    SQLAlertRepository,
+)
 
 # Import local components
 from kafka_producer import NormalizerKafkaProducer  # Import the new wrapper
 from shared.utils.script_client import ScriptClient, ScriptNotFoundError
 from normalizer.validator import Validator  # Import the validator
+from normalizer.alarm_handler import AlarmHandler  # Import the alarm handler
 from shared.config_loader import get_translator_configs
 from shared.translation.factory import TranslatorFactory
 
@@ -58,12 +64,16 @@ class NormalizerService:
         parser_repository: SQLParserRepository,
         datatype_repository: Optional[SQLDatatypeRepository] = None,
         sensor_repository: Optional[SQLSensorRepository] = None,
-        hardware_repository: Optional[SQLHardwareRepository] = None
+        hardware_repository: Optional[SQLHardwareRepository] = None,
+        alarm_repository: Optional[SQLAlarmRepository] = None,
+        alert_repository: Optional[SQLAlertRepository] = None
     ):
         self.parser_repository = parser_repository
         self.datatype_repository = datatype_repository
         self.sensor_repository = sensor_repository
         self.hardware_repository = hardware_repository
+        self.alarm_repository = alarm_repository
+        self.alert_repository = alert_repository
         self.consumer: Optional[KafkaConsumer] = None
         # Use the dedicated wrapper for producing messages
         self.kafka_producer: Optional[NormalizerKafkaProducer] = None
@@ -79,6 +89,15 @@ class NormalizerService:
             logger.info("Validator initialized with datatype repository")
         else:
             logger.warning("Validator not initialized - datatype repository not provided")
+            
+        # Initialize alarm handler if repositories are provided
+        self.alarm_handler = None
+        if alarm_repository and alert_repository:
+            # Note: kafka_producer will be set later in run() method
+            self.alarm_handler = AlarmHandler(alarm_repository, alert_repository)
+            logger.info("Alarm handler initialized with alarm and alert repositories")
+        else:
+            logger.warning("Alarm handler not initialized - alarm or alert repository not provided")
             
         self._running = False
         self._stop_event = (
@@ -307,7 +326,8 @@ class NormalizerService:
                         standardized_data = StandardizedOutput(
                             device_id=sensor_reading["device_id"],
                             values=sensor_reading["values"],
-                            label=sensor_reading["label"],
+                            labels=sensor_reading["labels"],
+                            display_names=sensor_reading["display_names"],
                             index=sensor_reading["index"],
                             metadata=sensor_reading["metadata"],
                             request_id=request_id,
@@ -357,6 +377,33 @@ class NormalizerService:
                         return True
                 
                 logger.debug(f"[{request_id}] Validated {len(validated_data_list)} validated outputs.")
+                
+                # 6.5 Process alarms for validated data
+                try:
+                    if self.alarm_handler and validated_data_list:
+                        total_alerts_created = []
+                        
+                        for validated_data in validated_data_list:
+                            # Process alarms for each validated output
+                            alert_ids = await self.alarm_handler.process_alarms(
+                                sensor_id=str(sensor.id),
+                                validated_data=validated_data,
+                                request_id=request_id
+                            )
+                            total_alerts_created.extend(alert_ids)
+                        
+                        if total_alerts_created:
+                            logger.info(f"[{request_id}] Created {len(total_alerts_created)} alerts for device {raw_message.device_id}")
+                        else:
+                            logger.debug(f"[{request_id}] No alarms triggered for device {raw_message.device_id}")
+                    else:
+                        logger.debug(f"[{request_id}] Alarm handler not available or no validated data to check")
+                        
+                except Exception as e:
+                    logger.error(f"[{request_id}] Error processing alarms for device {raw_message.device_id}: {e}")
+                    # Don't fail the entire message processing if alarm checking fails
+                    # Log the error and continue with data publishing
+                
             except (ValidationError, TypeError) as e:
                 logger.error(
                     f"[{request_id}] Parser script output failed validation for device {raw_message.device_id}: {e}\nOutput: {parser_output_list}"
@@ -730,6 +777,11 @@ class NormalizerService:
 
                 # Instantiate the producer wrapper
                 self.kafka_producer = NormalizerKafkaProducer(raw_producer)
+                
+                # Set kafka producer on alarm handler if available
+                if self.alarm_handler:
+                    self.alarm_handler.kafka_producer = self.kafka_producer
+                    logger.debug("Kafka producer set on alarm handler")
 
                 logger.info(
                     f"Consumer group '{config.KAFKA_CONSUMER_GROUP_ID}' waiting for messages on topic '{config.KAFKA_RAW_DATA_TOPIC}'..."

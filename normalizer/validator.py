@@ -14,6 +14,9 @@ class Validator:
     """
     Validates and normalizes sensor data based on configurable rules
     stored in the datatypes table.
+    
+    Note: The validator supports None values in min/max constraint arrays,
+    where None indicates no constraint for that specific array index.
     """
     
     def __init__(self, datatype_repository):
@@ -45,36 +48,43 @@ class Validator:
         """
         errors = []
         
-        # Get validation parameters from datatype object
-        validation_params = self._extract_validation_params(datatype)
+        # Check for auto-discovery and update datatype if enabled
+        if datatype and datatype.auto_discovery:
+            datatype = await self._perform_auto_discovery(datatype, standardized_data, device_id)
+        
         # Values to be processed
         values = standardized_data.values
         
         # 3. Apply any parsing operations first
-        parsing_applied = False
+        # parsing_applied = False
         
-        parsing_valid, parsed_values, parsing_errors = self._apply_parsing_operations(
-            values,
-            validation_params
-        )
+        # parsing_valid, parsed_values, parsing_errors = self._apply_parsing_operations(
+        #     values,
+        #     validation_params
+        # )
         
         # Add any parsing operation errors
-        for error_msg in parsing_errors:
-            errors.append(ErrorMessage(
-                error=error_msg,
-                original_message={"device_id": device_id},
-                request_id=request_id
-            ))
+        # for error_msg in parsing_errors:
+        #     errors.append(ErrorMessage(
+        #         error=error_msg,
+        #         original_message={"device_id": device_id},
+        #         request_id=request_id
+        #     ))
         
-        if parsing_valid and parsed_values:
-            # Use the parsed values for further validation
-            values = parsed_values
-            parsing_applied = True
-        logger.debug(f"parsing_applied: {parsing_applied}, parsed_values: {parsed_values}")
+        # if parsing_valid and parsed_values:
+        #     # Use the parsed values for further validation
+        #     values = parsed_values
+        #     parsing_applied = True
+        # logger.debug(f"parsing_applied: {parsing_applied}, parsed_values: {parsed_values}")
         # 4. Validate all values against the datatype
+        # data_type is now List[DatatypeType], pass full array for per-index validation
+        expected_types = []
+        if hasattr(datatype, 'data_type') and datatype.data_type:
+            expected_types = datatype.data_type
+            
         type_valid, converted_values, type_errors = self._validate_type(
             values, 
-            datatype.data_type
+            expected_types
         )
         logger.debug(f"type_valid: {type_valid}, converted_values: {converted_values}, type_errors: {type_errors}")
         # Add any type validation errors
@@ -88,7 +98,7 @@ class Validator:
         # 5. Validate range for all values
         range_valid, range_results, range_errors = self._validate_range(
             converted_values,
-            validation_params
+            datatype
         )
         logger.debug(f"range_valid: {range_valid}, range_results: {range_results}, range_errors: {range_errors}")
         # Add any range validation errors
@@ -108,52 +118,211 @@ class Validator:
                 converted_values,
                 request_id,
                 standardized_data,
-                validation_params
             )
             return validated_output, errors
         
         return None, errors
     
-    def _extract_validation_params(self, datatype: Any) -> Dict[str, Any]:
+    async def _perform_auto_discovery(
+        self, 
+        datatype: Any, 
+        standardized_data: StandardizedOutput, 
+        device_id: str
+    ) -> Any:
         """
-        Extract validation parameters from datatype object.
+        Perform auto-discovery to update datatype configuration for min, max, unit, data_type, display_names, and labels
+        based on information from standardized data metadata.
         
         Args:
-            datatype: The datatype model object
+            datatype: The datatype object to update
+            standardized_data: StandardizedOutput containing auto-discovery metadata
+            device_id: The device ID for logging
             
         Returns:
-            Dictionary of validation parameters
+            The updated datatype object
         """
-        validation_params = {}
-        
         try:
-            # Extract validation parameters from datatype attributes
-            if hasattr(datatype, 'min') and datatype.min is not None:
-                validation_params['min_value'] = datatype.min
+            # Extract auto-discovery metadata from standardized data
+            if not standardized_data.metadata or 'auto_discovery' not in standardized_data.metadata:
+                logger.debug(f"No auto-discovery metadata found for device {device_id}")
+                return datatype
                 
-            if hasattr(datatype, 'max') and datatype.max is not None:
-                validation_params['max_value'] = datatype.max
-                
-            if hasattr(datatype, 'parsing_op') and datatype.parsing_op:
-                validation_params['parsing_op'] = datatype.parsing_op
-                
-            if hasattr(datatype, 'unit') and datatype.unit:
-                validation_params['unit'] = datatype.unit
-                
-            logger.debug(f"Extracted validation parameters from datatype: {validation_params}")
-            return validation_params
+            auto_meta = standardized_data.metadata['auto_discovery']
+            logger.info(f"Processing auto-discovery for datatype {datatype.id} from device {device_id}")
             
+            # Prepare update data dictionary
+            update_data = {}
+            updated = False
+            
+            # Get the number of values for creating arrays
+            num_values = len(standardized_data.values)
+            
+            # 1. Handle units - use existing first value if available, otherwise use suggested value
+            # Check if datatype already has unit values
+            if hasattr(datatype, 'unit') and datatype.unit and len(datatype.unit) > 0:
+                # Use first existing unit value for all values
+                first_unit = datatype.unit[0]
+                update_data['unit'] = [first_unit] * num_values
+                updated = True
+                logger.info(f"Auto-discovery: Used existing first unit value for datatype {datatype.id}: {first_unit}")
+            elif auto_meta.get('suggested_unit'):
+                suggested_units = auto_meta['suggested_unit']
+                if suggested_units:
+                    # Use suggested units
+                    update_data['unit'] = suggested_units
+                    updated = True
+                    logger.info(f"Auto-discovery: Updated units for datatype {datatype.id}: {suggested_units}")
+            
+            # 2. Handle data types - use existing first value if available, otherwise use suggested value
+            # Check if datatype already has data_type values
+            if hasattr(datatype, 'data_type') and datatype.data_type and len(datatype.data_type) > 0:
+                # Use first existing data type for all values
+                first_data_type = datatype.data_type[0]
+                update_data['data_type'] = [first_data_type] * num_values
+                updated = True
+                logger.info(f"Auto-discovery: Used existing first data type for datatype {datatype.id}: {first_data_type}")
+            elif auto_meta.get('suggested_data_type'):
+                suggested_types = auto_meta['suggested_data_type']
+                # Convert string data types to DatatypeType enums
+                from preservarium_sdk.domain.model.datatype import DatatypeType
+                try:
+                    # Use suggested data types
+                    type_enums = []
+                    for dt_str in suggested_types:
+                        if dt_str == 'number':
+                            type_enums.append(DatatypeType.NUMBER)
+                        elif dt_str == 'boolean':
+                            type_enums.append(DatatypeType.BOOLEAN)
+                        elif dt_str == 'string':
+                            type_enums.append(DatatypeType.STRING)
+                        else:
+                            type_enums.append(DatatypeType.NUMBER)  # Default fallback
+                    
+                    if type_enums:
+                        # Create data_type list with same length as values, using the first detected type
+                        primary_type = type_enums[0] if type_enums else DatatypeType.NUMBER
+                        update_data['data_type'] = [primary_type] * num_values
+                        updated = True
+                        logger.info(f"Auto-discovery: Updated data types for datatype {datatype.id}: {[str(primary_type)] * num_values}")
+                except Exception as e:
+                    logger.warning(f"Error converting data types for auto-discovery: {e}")
+            
+            # 3. Handle min constraint - use existing first value if available, otherwise use suggested value
+            # Check if datatype already has min values
+            if hasattr(datatype, 'min') and datatype.min and len(datatype.min) > 0:
+                # Use first existing min value for all values
+                first_min = datatype.min[0]
+                update_data['min'] = [first_min] * num_values
+                updated = True
+                logger.info(f"Auto-discovery: Used existing first min value for datatype {datatype.id}: {first_min}")
+            elif auto_meta.get('suggested_min') is not None:
+                suggested_min = auto_meta['suggested_min']
+                # Use suggested min
+                update_data['min'] = [suggested_min] * num_values
+                updated = True
+                logger.info(f"Auto-discovery: Updated min constraint for datatype {datatype.id}: {suggested_min}")
+            
+            # 4. Handle max constraint - use existing first value if available, otherwise use suggested value
+            # Check if datatype already has max values
+            if hasattr(datatype, 'max') and datatype.max and len(datatype.max) > 0:
+                # Use first existing max value for all values
+                first_max = datatype.max[0]
+                update_data['max'] = [first_max] * num_values
+                updated = True
+                logger.info(f"Auto-discovery: Used existing first max value for datatype {datatype.id}: {first_max}")
+            elif auto_meta.get('suggested_max') is not None:
+                suggested_max = auto_meta['suggested_max']
+                # Use suggested max
+                update_data['max'] = [suggested_max] * num_values
+                updated = True
+                logger.info(f"Auto-discovery: Updated max constraint for datatype {datatype.id}: {suggested_max}")
+            
+            # 5. Handle display names - use existing first value if available, otherwise use suggested value
+            # Check if datatype already has display_names values
+            
+            if standardized_data.display_names:
+                # Use suggested display names with processing
+                if hasattr(datatype, 'display_names') and datatype.display_names and len(datatype.display_names) > 0:
+                    # Use first existing display name for all values
+                    first_display_name = datatype.display_names[0]
+                    datatype_display_names = [first_display_name] * num_values
+                else:
+                    datatype_display_names = []  # Empty since no existing display names
+
+                processed_display_names = self._process_display_name_replacement(
+                    standardized_data.display_names, datatype_display_names
+                )
+                update_data['display_names'] = processed_display_names
+                updated = True
+                logger.info(f"Auto-discovery: Updated display names for datatype {datatype.id}: {processed_display_names}")
+            elif hasattr(datatype, 'display_names') and datatype.display_names and len(datatype.display_names) > 0:
+                # Use first existing display name for all values
+                first_display_name = datatype.display_names[0]
+                update_data['display_names'] = [first_display_name] * num_values
+                updated = True
+                logger.info(f"Auto-discovery: Used existing first display name for datatype {datatype.id}: {first_display_name}")
+            
+            # 6. Handle labels - use existing first value if available, otherwise use suggested value
+            # Check if datatype already has labels values
+            
+            if standardized_data.labels:
+                # Use suggested labels
+                update_data['labels'] = standardized_data.labels
+                updated = True
+                logger.info(f"Auto-discovery: Updated labels for datatype {datatype.id}: {standardized_data.labels}")
+            elif hasattr(datatype, 'labels') and datatype.labels and len(datatype.labels) > 0:
+                # Use first existing label for all values
+                first_label = datatype.labels[0]
+                update_data['labels'] = [first_label] * num_values
+                updated = True
+                logger.info(f"Auto-discovery: Used existing first label for datatype {datatype.id}: {first_label}")
+            
+            if hasattr(datatype, 'persist') and datatype.persist:
+                first_persist = datatype.persist[0]
+                update_data['persist'] = [first_persist] * num_values
+                updated = True
+                logger.info(f"Auto-discovery: Set persist to True for datatype {datatype.id}")
+            # elif auto_meta.get('suggested_persist') is not None:
+            #     update_data['persist'] = [auto_meta['suggested_persist']] * num_values
+            #     updated = True
+            #     logger.info(f"Auto-discovery: Updated persist for datatype {datatype.id}: {auto_meta['suggested_persist']}")
+            
+            # 7. Set auto_discovery to False after performing discovery
+            # update_data['auto_discovery'] = False
+            # updated = True
+            logger.info(f"Auto-discovery: Set auto_discovery to False for datatype {datatype.id}")
+            
+            # Apply updates to the datatype if any changes were made
+            if updated and update_data:
+                try:
+                    # Update the local datatype object to reflect changes for current validation
+                    for key, value in update_data.items():
+                        if hasattr(datatype, key):
+                            setattr(datatype, key, value)
+                    return datatype
+                            
+                except Exception as e:
+                    logger.error(f"Auto-discovery: Failed to update datatype {datatype.id}: {e}")
+                    return datatype
+            else:
+                logger.debug(f"Auto-discovery: No updates needed for datatype {datatype.id}")
+                return datatype
+                
         except Exception as e:
-            logger.error(f"Error extracting validation parameters from datatype: {e}")
-            return {}
-        
-    def _validate_range(self, values: List[Any], validation_params: Dict) -> Tuple[bool, List[bool], List[str]]:
+            logger.error(f"Auto-discovery error for datatype {datatype.id} from device {device_id}: {e}")
+            return datatype  # Return original datatype even if auto-discovery fails
+
+    def _validate_range(self, values: List[Any], datatype: Any) -> Tuple[bool, List[bool], List[str]]:
         """
-        Check if values are within the range defined in validation parameters.
+        Check if values are within the range defined in datatype.
+        Uses per-index validation: each value is checked against min/max at the same index.
+        
+        Note: min and max arrays can contain None values to indicate
+        no constraint for that specific index.
         
         Args:
             values: The list of values to validate
-            validation_params: Dictionary of validation parameters
+            datatype: The datatype object containing min and max constraints
             
         Returns:
             Tuple of (all_valid, validation_results, error_messages)
@@ -161,23 +330,15 @@ class Validator:
         if not values:
             return False, [], ["No values provided for range validation"]
         
-        # Get min and max values from validation params
-        min_value = validation_params.get("min_value")
-        max_value = validation_params.get("max_value")
+        # Get min and max value arrays from datatype
+        min_values = getattr(datatype, 'min', [])
+        max_values = getattr(datatype, 'max', [])
         
-        # If no range is defined, consider all values valid
-        if min_value is None or max_value is None:
+        # If no range constraints are defined, consider all values valid
+        if not min_values and not max_values:
             return True, [True] * len(values), []
         
-        # Try to convert range bounds to float
-        try:
-            min_val = float(min_value)
-            max_val = float(max_value)
-        except (ValueError, TypeError):
-            logger.warning(f"Invalid range bounds: min={min_value}, max={max_value}")
-            return False, [False] * len(values), [f"Invalid range bounds: min={min_value}, max={max_value}"]
-        
-        # Validate each value
+        # Validate each value using corresponding index constraints
         all_valid = True
         validation_results = []
         error_messages = []
@@ -189,28 +350,81 @@ class Validator:
                 all_valid = False
                 continue
             
+            # Get min/max for this index (use last available if arrays are shorter)
+            min_val = None
+            max_val = None
+            
+            if min_values and i < len(min_values):
+                min_val = min_values[i]
+            elif min_values:
+                # Use last available min value for remaining indices
+                min_val = min_values[-1]
+                
+            if max_values and i < len(max_values):
+                max_val = max_values[i]
+            elif max_values:
+                # Use last available max value for remaining indices
+                max_val = max_values[-1]
+            
+            # Skip validation if no constraints for this value (both are None)
+            if min_val is None and max_val is None:
+                logger.debug(f"No min/max constraints for value at index {i}, skipping range validation")
+                validation_results.append(True)
+                continue
+            
             try:
                 value_float = float(value)
-                valid = min_val <= value_float <= max_val
-                validation_results.append(valid)
+                valid = True
                 
+                # Check min constraint if available (not None)
+                if min_val is not None:
+                    try:
+                        min_float = float(min_val)
+                        if value_float < min_float:
+                            valid = False
+                            error_messages.append(f"Value {value} at index {i} is below minimum {min_val}")
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Invalid min constraint '{min_val}' at index {i}: {e}")
+                        # Continue validation with max constraint if available
+                
+                # Check max constraint if available (not None)
+                if max_val is not None:
+                    try:
+                        max_float = float(max_val)
+                        if value_float > max_float:
+                            valid = False
+                            error_messages.append(f"Value {value} at index {i} is above maximum {max_val}")
+                    except (ValueError, TypeError) as e:
+                        logger.warning(f"Invalid max constraint '{max_val}' at index {i}: {e}")
+                        # Continue validation - this constraint is ignored
+                
+                validation_results.append(valid)
                 if not valid:
-                    error_messages.append(f"Value {value} at index {i} is outside allowed range [{min_val}, {max_val}]")
                     all_valid = False
-            except (ValueError, TypeError):
+                else:
+                    # Log successful validation for debugging
+                    constraints = []
+                    if min_val is not None:
+                        constraints.append(f"min={min_val}")
+                    if max_val is not None:
+                        constraints.append(f"max={max_val}")
+                    logger.debug(f"Value {value} at index {i} passed range validation ({', '.join(constraints)})")
+                    
+            except (ValueError, TypeError) as e:
                 validation_results.append(False)
-                error_messages.append(f"Range validation failed due to type conversion error: {value}")
+                error_messages.append(f"Range validation failed due to type conversion error: {value} at index {i} - {str(e)}")
                 all_valid = False
         
         return all_valid, validation_results, error_messages
         
-    def _validate_type(self, values: List[Any], expected_type: Optional[DatatypeType]) -> Tuple[bool, List[Any], List[str]]:
+    def _validate_type(self, values: List[Any], expected_types: List[DatatypeType]) -> Tuple[bool, List[Any], List[str]]:
         """
         Validate and convert a list of values to the expected type if possible.
+        Uses per-index validation: each value is validated against the type at the same index.
         
         Args:
             values: The list of values to validate and convert
-            expected_type: The expected data type (DatatypeType enum)
+            expected_types: List of expected data types (DatatypeType enums)
             
         Returns:
             Tuple of (all_valid, converted_values, error_messages)
@@ -218,8 +432,8 @@ class Validator:
         if not values:
             return False, [], ["No values provided for validation"]
         
-        if not expected_type:
-            # If no expected type is specified, consider any values valid
+        if not expected_types:
+            # If no expected types are specified, consider any values valid
             return True, values, []
         
         converted_values = []
@@ -231,6 +445,16 @@ class Validator:
                 converted_values.append(None)
                 error_messages.append(f"Value at index {i} is None")
                 all_valid = False
+                continue
+            
+            # Get expected type for this index (use last available if array is shorter)
+            if i < len(expected_types):
+                expected_type = expected_types[i]
+            elif len(expected_types) > 0:
+                expected_type = expected_types[-1]  # Use last type for remaining values
+            else:
+                # No type constraint, keep original value
+                converted_values.append(value)
                 continue
             
             try:
@@ -274,12 +498,12 @@ class Validator:
                         converted_values.append(str(value).encode('utf-8'))
                 else:
                     # Default case - no conversion
-                    logger.info(f"Using default validation for unrecognized type: {expected_type}")
+                    logger.info(f"Using default validation for unrecognized type: {expected_type} at index {i}")
                     converted_values.append(value)
             except (ValueError, TypeError) as e:
-                logger.warning(f"Type validation failed: {value} is not a valid {expected_type}. Error: {e}")
+                logger.warning(f"Type validation failed: {value} is not a valid {expected_type} at index {i}. Error: {e}")
                 converted_values.append(value)  # Keep original value
-                error_messages.append(f"Type validation failed for value '{value}': expected {expected_type}. Error: {e}")
+                error_messages.append(f"Type validation failed for value '{value}' at index {i}: expected {expected_type}. Error: {e}")
                 all_valid = False
         
         return all_valid, converted_values, error_messages
@@ -291,7 +515,6 @@ class Validator:
         converted_values: List[Any], 
         request_id: Optional[str] = None,
         standardized_data: Optional[StandardizedOutput] = None,
-        validation_params: Optional[Dict] = None
     ) -> ValidatedOutput:
         """
         Build a ValidatedOutput object from validated data.
@@ -306,44 +529,41 @@ class Validator:
         Returns:
             ValidatedOutput object with validated data
         """
-        # Format the label using dedicated function
-        label = self._format_label(standardized_data, datatype)
-        
+
         # Build metadata with validation info
         # Always create base metadata
+        
+        # Convert DatatypeType enums to strings for JSON serialization
+        datatype_type_strings = []
+        if datatype.data_type:
+            datatype_type_strings = [str(dt.value) if hasattr(dt, 'value') else str(dt) for dt in datatype.data_type]
+        
         metadata = {
-            "datatype_id": str(datatype.id) if hasattr(datatype, 'id') else None,
-            "datatype_name": datatype.name if hasattr(datatype, 'name') else None,
-            "datatype_unit": validation_params.get("unit", None),
-            "datatype_type": str(datatype.data_type) if hasattr(datatype, 'data_type') and datatype.data_type else None,
-            "datatype_category": str(datatype.category) if hasattr(datatype, 'category') and datatype.category else None,
-            "persist": datatype.persist if hasattr(datatype, 'persist') else True,
+            "datatype_id": datatype.id,
+            "datatype_unit": datatype.unit,
+            "datatype_type": datatype_type_strings,
+            "datatype_category": str(datatype.category),
+            "persist": datatype.persist,
         }
         
-                # Conditionally merge standardized_data.metadata if it exists and has content
-        if standardized_data.metadata and len(standardized_data.metadata) > 0:
-            metadata.update(standardized_data.metadata)
-            
-        # Process display name replacement
-        metadata["datatype_display_name"] = self._process_display_name_replacement(metadata, datatype)
-        
-        logger.info(f"Metadata: {metadata}")
         # Create ValidatedOutput for internal tracking (no metadata)
         validated_output = ValidatedOutput(
             device_id=device_id,
             values=converted_values,
-            label=label,
-            index=datatype.datatype_index if hasattr(datatype, 'datatype_index') else "",
+            labels=datatype.labels,
+            display_names=datatype.display_names,
+            index=datatype.datatype_index,
             request_id=request_id,
             timestamp=standardized_data.timestamp,
-            metadata=metadata
+            metadata=metadata,
         )
         
         return validated_output
 
     def _apply_parsing_operations(self, values: List[Any], validation_params: Dict) -> Tuple[bool, List[Any], List[str]]:
         """
-        Apply parsing operations to values based on the operation parameter.
+        Apply parsing operations to values based on per-index operation parameters.
+        Each value uses the parsing operation at the corresponding index.
         
         Args:
             values: List of values to apply operations to
@@ -355,10 +575,10 @@ class Validator:
         if not values:
             return True, [], []
         
-        # Look for the operation parameter - it might be under 'parsing_op' key
-        parsing_op = validation_params.get("parsing_op")
-        if not parsing_op:
-            # No operation to apply
+        # Look for the operation parameter array
+        parsing_ops = validation_params.get("parsing_ops", [])
+        if not parsing_ops:
+            # No operations to apply
             return True, values, []
         
         # Initialize result variables
@@ -367,10 +587,25 @@ class Validator:
         error_messages = []
         
         try:
-            # Process each value with the parsing operation formula
+            # Process each value with the corresponding parsing operation
             for i, value in enumerate(values):
                 if value is None:
                     parsed_values.append(None)
+                    continue
+                
+                # Get parsing operation for this index (use last available if array is shorter)
+                if i < len(parsing_ops):
+                    parsing_op = parsing_ops[i]
+                elif len(parsing_ops) > 0:
+                    parsing_op = parsing_ops[-1]  # Use last operation for remaining values
+                else:
+                    # No parsing operation available, keep original value
+                    parsed_values.append(value)
+                    continue
+                
+                # Skip if parsing operation is empty
+                if not parsing_op:
+                    parsed_values.append(value)
                     continue
                     
                 try:
@@ -382,43 +617,42 @@ class Validator:
                     result = eval(formula, {"__builtins__": {}})
                     parsed_values.append(result)
                     
-                    logger.debug(f"Applied operation '{parsing_op}' to value '{value}' with result: {result}")
+                    logger.debug(f"Applied operation '{parsing_op}' to value '{value}' at index {i} with result: {result}")
                     
                 except (ValueError, TypeError, SyntaxError, NameError) as e:
-                    error_messages.append(f"Failed to apply operation '{parsing_op}' to value '{value}': {str(e)}")
+                    error_messages.append(f"Failed to apply operation '{parsing_op}' to value '{value}' at index {i}: {str(e)}")
                     parsed_values.append(value)  # Keep original value
                     success = False
                     
         except Exception as e:
             # Handle unexpected errors
-            error_messages.append(f"Error applying operation: {str(e)}")
+            error_messages.append(f"Error applying operations: {str(e)}")
             return False, values, error_messages
         
         return success, parsed_values, error_messages
 
-    def _process_display_name_replacement(self, metadata: Dict[str, Any], datatype: Any) -> List[str]:
+    def _process_display_name_replacement(self, source_display_names: Optional[List[str]], datatype_display_names: List[str]) -> List[str]:
         """
         Process display name replacement by replacing %name% placeholders with actual datatype display names.
         
         Args:
-            metadata: Dictionary containing metadata that may have display_name with placeholders
-            datatype: The datatype object containing display_name as JSON string
+            source_display_names: Optional list of display names that may contain placeholders
+            datatype_display_names: The datatype object containing display_names as List[str]
             
         Returns:
             List of processed display names (always returns a list, even if empty)
         """
-        # Replace %name% placeholder in display_name with datatype.display_name
-        if "display_name" in metadata and "%name%" in str(metadata["display_name"]):
-            # Parse datatype.display_name from JSON string to list
-            try:
-                datatype_display_names = json.loads(datatype.display_name) if hasattr(datatype, 'display_name') and datatype.display_name else []
-            except (json.JSONDecodeError, TypeError):
-                datatype_display_names = []
-            
+        
+        # If no source_display_names provided, use datatype display_names directly
+        if not source_display_names:
+            return datatype_display_names
+        # Replace %name% placeholder in display_names with datatype.display_names
+        if source_display_names and "%name%" in str(source_display_names):
+            # Get datatype.display_names as List[str] directly
             # Handle list replacement - both should be lists with matching indexes
-            if isinstance(metadata["display_name"], list) and isinstance(datatype_display_names, list):
+            if isinstance(source_display_names, list) and isinstance(datatype_display_names, list):
                 updated_display_names = []
-                for i, template in enumerate(metadata["display_name"]):
+                for i, template in enumerate(source_display_names):
                     if i < len(datatype_display_names):
                         replacement = datatype_display_names[i] if datatype_display_names[i] else ""
                         updated_display_names.append(str(template).replace("%name%", replacement))
@@ -426,50 +660,38 @@ class Validator:
                         # No corresponding datatype display name, remove placeholder
                         updated_display_names.append(str(template).replace("%name%", ""))
                 return updated_display_names
-            else:
-                # Fallback: treat as string replacement
-                datatype_display_name = datatype_display_names[0] if datatype_display_names else ""
-                return [str(metadata["display_name"]).replace("%name%", datatype_display_name)]
-        else:
-            # No placeholder, just use the original datatype.display_name
-            try:
-                parsed_names = json.loads(datatype.display_name) if hasattr(datatype, 'display_name') and datatype.display_name else []
-                # Ensure we always return a list
-                if isinstance(parsed_names, list):
-                    return [str(name) for name in parsed_names]  # Convert all to strings
-                else:
-                    return [str(parsed_names)] if parsed_names is not None else []
-            except (json.JSONDecodeError, TypeError):
-                display_name = datatype.display_name if hasattr(datatype, 'display_name') else None
-                return [str(display_name)] if display_name is not None else []
+
+        # If no replacement needed, return source_display_names as is
+        return source_display_names if source_display_names else datatype_display_names
 
     def _format_label(self, standardized_data: Optional[StandardizedOutput], datatype: Any) -> List[str]:
         """
         Format and return the label list from standardized_data or datatype.
         
         Args:
-            standardized_data: Optional StandardizedOutput object containing label
-            datatype: The datatype object containing label as JSON string
+            standardized_data: Optional StandardizedOutput object containing labels
+            datatype: The datatype object containing labels as List[str]
             
         Returns:
             List of label strings (always returns a list, even if empty)
         """
         # Get unit label from standardized_data first, then datatype if needed
-        if standardized_data and standardized_data.label is not None:
+        if standardized_data and standardized_data.labels is not None:
             # Ensure it's a list of strings
-            if isinstance(standardized_data.label, list):
-                return [str(item) for item in standardized_data.label]
+            if isinstance(standardized_data.labels, list):
+                return [str(item) for item in standardized_data.labels]
             else:
-                return [str(standardized_data.label)]
-        elif hasattr(datatype, 'label') and datatype.label:
+                return [str(standardized_data.labels)]
+        elif hasattr(datatype, 'labels') and datatype.labels:
             try:
-                parsed_label = json.loads(datatype.label)
+                # labels is now a List[str], not a JSON string
+                datatype_labels = datatype.labels
                 # Ensure it's always a list of strings
-                if isinstance(parsed_label, list):
-                    return [str(item) for item in parsed_label]
+                if isinstance(datatype_labels, list):
+                    return [str(item) for item in datatype_labels]
                 else:
-                    return [str(parsed_label)] if parsed_label is not None else []
-            except (json.JSONDecodeError, TypeError):
+                    return [str(datatype_labels)] if datatype_labels is not None else []
+            except (TypeError):
                 return []
         
         return []

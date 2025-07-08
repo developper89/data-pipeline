@@ -148,7 +148,7 @@ class Validator:
                 return datatype
                 
             auto_meta = standardized_data.metadata['auto_discovery']
-            logger.info(f"Processing auto-discovery for datatype {datatype.id} from device {device_id}")
+            logger.debug(f"Processing auto-discovery for datatype {datatype.id} from device {device_id}")
             
             # Prepare update data dictionary
             update_data = {}
@@ -164,14 +164,14 @@ class Validator:
                 first_unit = datatype.unit[0]
                 update_data['unit'] = [first_unit] * num_values
                 updated = True
-                logger.info(f"Auto-discovery: Used existing first unit value for datatype {datatype.id}: {first_unit}")
+                logger.debug(f"Auto-discovery: Used existing first unit value for datatype {datatype.id}: {first_unit}")
             elif auto_meta.get('suggested_unit'):
                 suggested_units = auto_meta['suggested_unit']
                 if suggested_units:
                     # Use suggested units
                     update_data['unit'] = suggested_units
                     updated = True
-                    logger.info(f"Auto-discovery: Updated units for datatype {datatype.id}: {suggested_units}")
+                    logger.debug(f"Auto-discovery: Updated units for datatype {datatype.id}: {suggested_units}")
             
             # 2. Handle data types - use existing first value if available, otherwise use suggested value
             # Check if datatype already has data_type values
@@ -180,7 +180,7 @@ class Validator:
                 first_data_type = datatype.data_type[0]
                 update_data['data_type'] = [first_data_type] * num_values
                 updated = True
-                logger.info(f"Auto-discovery: Used existing first data type for datatype {datatype.id}: {first_data_type}")
+                logger.debug(f"Auto-discovery: Used existing first data type for datatype {datatype.id}: {first_data_type}")
             elif auto_meta.get('suggested_data_type'):
                 suggested_types = auto_meta['suggested_data_type']
                 # Convert string data types to DatatypeType enums
@@ -203,7 +203,7 @@ class Validator:
                         primary_type = type_enums[0] if type_enums else DatatypeType.NUMBER
                         update_data['data_type'] = [primary_type] * num_values
                         updated = True
-                        logger.info(f"Auto-discovery: Updated data types for datatype {datatype.id}: {[str(primary_type)] * num_values}")
+                        logger.debug(f"Auto-discovery: Updated data types for datatype {datatype.id}: {[str(primary_type)] * num_values}")
                 except Exception as e:
                     logger.warning(f"Error converting data types for auto-discovery: {e}")
             
@@ -214,13 +214,13 @@ class Validator:
                 first_min = datatype.min[0]
                 update_data['min'] = [first_min] * num_values
                 updated = True
-                logger.info(f"Auto-discovery: Used existing first min value for datatype {datatype.id}: {first_min}")
+                logger.debug(f"Auto-discovery: Used existing first min value for datatype {datatype.id}: {first_min}")
             elif auto_meta.get('suggested_min') is not None:
                 suggested_min = auto_meta['suggested_min']
                 # Use suggested min
                 update_data['min'] = [suggested_min] * num_values
                 updated = True
-                logger.info(f"Auto-discovery: Updated min constraint for datatype {datatype.id}: {suggested_min}")
+                logger.debug(f"Auto-discovery: Updated min constraint for datatype {datatype.id}: {suggested_min}")
             
             # 4. Handle max constraint - use existing first value if available, otherwise use suggested value
             # Check if datatype already has max values
@@ -229,13 +229,13 @@ class Validator:
                 first_max = datatype.max[0]
                 update_data['max'] = [first_max] * num_values
                 updated = True
-                logger.info(f"Auto-discovery: Used existing first max value for datatype {datatype.id}: {first_max}")
+                logger.debug(f"Auto-discovery: Used existing first max value for datatype {datatype.id}: {first_max}")
             elif auto_meta.get('suggested_max') is not None:
                 suggested_max = auto_meta['suggested_max']
                 # Use suggested max
                 update_data['max'] = [suggested_max] * num_values
                 updated = True
-                logger.info(f"Auto-discovery: Updated max constraint for datatype {datatype.id}: {suggested_max}")
+                logger.debug(f"Auto-discovery: Updated max constraint for datatype {datatype.id}: {suggested_max}")
             
             # 5. Handle display names - use existing first value if available, otherwise use suggested value
             # Check if datatype already has display_names values
@@ -254,13 +254,13 @@ class Validator:
                 )
                 update_data['display_names'] = processed_display_names
                 updated = True
-                logger.info(f"Auto-discovery: Updated display names for datatype {datatype.id}: {processed_display_names}")
+                logger.debug(f"Auto-discovery: Updated display names for datatype {datatype.id}: {processed_display_names}")
             elif hasattr(datatype, 'display_names') and datatype.display_names and len(datatype.display_names) > 0:
                 # Use first existing display name for all values
                 first_display_name = datatype.display_names[0]
                 update_data['display_names'] = [first_display_name] * num_values
                 updated = True
-                logger.info(f"Auto-discovery: Used existing first display name for datatype {datatype.id}: {first_display_name}")
+                logger.debug(f"Auto-discovery: Used existing first display name for datatype {datatype.id}: {first_display_name}")
             
             # 6. Handle labels - use existing first value if available, otherwise use suggested value
             # Check if datatype already has labels values
@@ -269,19 +269,19 @@ class Validator:
                 # Use suggested labels
                 update_data['labels'] = standardized_data.labels
                 updated = True
-                logger.info(f"Auto-discovery: Updated labels for datatype {datatype.id}: {standardized_data.labels}")
+                logger.debug(f"Auto-discovery: Updated labels for datatype {datatype.id}: {standardized_data.labels}")
             elif hasattr(datatype, 'labels') and datatype.labels and len(datatype.labels) > 0:
                 # Use first existing label for all values
                 first_label = datatype.labels[0]
                 update_data['labels'] = [first_label] * num_values
                 updated = True
-                logger.info(f"Auto-discovery: Used existing first label for datatype {datatype.id}: {first_label}")
+                logger.debug(f"Auto-discovery: Used existing first label for datatype {datatype.id}: {first_label}")
             
             if hasattr(datatype, 'persist') and datatype.persist:
                 first_persist = datatype.persist[0]
                 update_data['persist'] = [first_persist] * num_values
                 updated = True
-                logger.info(f"Auto-discovery: Set persist to True for datatype {datatype.id}")
+                logger.debug(f"Auto-discovery: Set persist to True for datatype {datatype.id}")
             # elif auto_meta.get('suggested_persist') is not None:
             #     update_data['persist'] = [auto_meta['suggested_persist']] * num_values
             #     updated = True
@@ -290,7 +290,7 @@ class Validator:
             # 7. Set auto_discovery to False after performing discovery
             # update_data['auto_discovery'] = False
             # updated = True
-            logger.info(f"Auto-discovery: Set auto_discovery to False for datatype {datatype.id}")
+            logger.debug(f"Auto-discovery: Set auto_discovery to False for datatype {datatype.id}")
             
             # Apply updates to the datatype if any changes were made
             if updated and update_data:

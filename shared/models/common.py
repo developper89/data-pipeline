@@ -95,42 +95,51 @@ class AlarmMessage(BaseMessage):
     """
     Represents an alarm configuration discovered and published to Kafka.
     Published when a new alarm is found or when alarm configuration changes.
+    Aligned with API GetAlarmSchema structure.
     """
-    alarm_id: str = Field(..., description="UUID of the alarm")
-    sensor_id: str = Field(..., description="UUID of the sensor this alarm monitors")
-    device_id: str = Field(..., description="Device ID parameter of the sensor")
-    datatype_id: str = Field(..., description="UUID of the datatype this alarm monitors")
-    alarm_name: str = Field(..., description="Name of the alarm")
+    id: str = Field(..., description="UUID of the alarm")
+    name: str = Field(..., description="Name of the alarm")
     description: str = Field(..., description="Description of the alarm")
-    alarm_type: str = Field(..., description="Type of alarm (Status, Measure)")
-    field_name: str = Field(..., description="Field name being monitored")
-    threshold: float = Field(..., description="Threshold value for triggering")
-    math_operator: str = Field(..., description="Mathematical operator (>, <, ==, etc.)")
     level: int = Field(..., description="Alarm severity level")
+    math_operator: str = Field(..., description="Mathematical operator (>, <, >=, <=, ==, !=)")
     active: bool = Field(..., description="Whether the alarm is currently active")
+    threshold: int = Field(..., description="Threshold value for triggering")
+    field_name: str = Field(..., description="Field name being monitored")
+    field_label: str = Field(..., description="Field label for display")
+    datatype_id: str = Field(..., description="UUID of the datatype this alarm monitors")
+    sensor_id: str = Field(..., description="UUID of the sensor this alarm monitors")
+    alarm_type: str = Field(..., description="Type of alarm (Status, Measure)")
     user_id: str = Field(..., description="UUID of the user who created the alarm")
-    recipients: Optional[str] = Field(None, description="Comma-separated list of recipients")
+    recipients: Optional[str] = Field(None, description="Comma-separated email addresses")
     notify_creator: bool = Field(True, description="Whether to notify the alarm creator")
-    created_at: datetime = Field(..., description="When the alarm was created")
-    updated_at: datetime = Field(..., description="When the alarm was last updated")
+    
+    # Additional fields for message bus context (not in API schema)
+    device_id: Optional[str] = Field(None, description="Device ID parameter of the sensor")
+    created_at: Optional[datetime] = Field(None, description="When the alarm was created")
+    updated_at: Optional[datetime] = Field(None, description="When the alarm was last updated")
 
 class AlertMessage(BaseMessage):
     """
     Represents an alert triggered by an alarm condition.
     Published to Kafka when alarm thresholds are exceeded.
+    Aligned with API GetAlertSchema structure.
     """
-    alert_id: str = Field(..., description="UUID of the created alert")
-    alarm_id: str = Field(..., description="UUID of the alarm that triggered this alert")
-    sensor_id: str = Field(..., description="UUID of the sensor that triggered the alarm")
-    device_id: str = Field(..., description="Device ID parameter of the sensor")
-    alarm_name: str = Field(..., description="Name of the alarm")
-    alarm_type: str = Field(..., description="Type of alarm (Status, Measure)")
-    field_name: str = Field(..., description="Field name that was monitored")
-    trigger_value: float = Field(..., description="Value that triggered the alarm")
-    threshold: float = Field(..., description="Threshold value that was exceeded")
-    math_operator: str = Field(..., description="Mathematical operator used (>, <, ==, etc.)")
-    level: int = Field(..., description="Alarm severity level")
+    id: str = Field(..., description="UUID of the created alert")
+    name: str = Field(..., description="Name of the alert")
+    end_date: Optional[datetime] = Field(None, description="End date of the alert")
     message: str = Field(..., description="Human-readable alert message")
-    triggered_at: datetime = Field(..., description="When the alert was triggered")
-    recipients: Optional[str] = Field(None, description="Comma-separated list of recipients")
-    notify_creator: bool = Field(True, description="Whether to notify the alarm creator")
+    treated: bool = Field(False, description="Whether the alert has been treated")
+    start_date: datetime = Field(..., description="Start date of the alert")
+    error_value: float = Field(..., description="Value that triggered the alert")
+    
+    # Additional fields for message bus context (not in API schema)
+    alarm_id: Optional[str] = Field(None, description="UUID of the alarm that triggered this alert")
+    sensor_id: Optional[str] = Field(None, description="UUID of the sensor that triggered the alarm")
+    device_id: Optional[str] = Field(None, description="Device ID parameter of the sensor")
+    alarm_type: Optional[str] = Field(None, description="Type of alarm (Status, Measure)")
+    field_name: Optional[str] = Field(None, description="Field name that was monitored")
+    threshold: Optional[float] = Field(None, description="Threshold value that was exceeded")
+    math_operator: Optional[str] = Field(None, description="Mathematical operator used (>, <, >=, <=, ==, !=)")
+    level: Optional[int] = Field(None, description="Alarm severity level")
+    recipients: Optional[str] = Field(None, description="Comma-separated email addresses")
+    notify_creator: Optional[bool] = Field(None, description="Whether to notify the alarm creator")

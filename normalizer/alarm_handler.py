@@ -10,7 +10,7 @@ from shared.models.common import ValidatedOutput, ErrorMessage, AlertMessage, Al
 # Import the MathOperator enum for direct comparison
 from preservarium_sdk.domain.model.alarm import MathOperator
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("alarm_handler")
 
 class AlarmHandler:
     """
@@ -51,17 +51,21 @@ class AlarmHandler:
         try:
             created_alert_ids = []
             
-            # Get all active alarms for this sensor
+            # Get datatype_id from validated data metadata
+            data_datatype_id = validated_data.metadata['datatype_id']
+            
+            # Get active alarms for this sensor and datatype directly
             active_alarms = await self.alarm_repository.find_by(
-                sensor_id=uuid.UUID(sensor_id),
+                sensor_id=str(sensor_id),
+                datatype_id=str(data_datatype_id),
                 active=True
             )
             
             if not active_alarms:
-                logger.debug(f"[{request_id}] No active alarms found for sensor {sensor_id}")
+                logger.debug(f"[{request_id}] No active alarms found for sensor {validated_data.device_id} and datatype {data_datatype_id}")
                 return created_alert_ids
             
-            logger.debug(f"[{request_id}] Found {len(active_alarms)} active alarms for sensor {sensor_id}")
+            logger.debug(f"[{request_id}] Found {len(active_alarms)} active alarms for sensor {validated_data.device_id} and datatype {data_datatype_id}")
             
             # Check for unpublished alarms and publish them to Kafka
             await self._publish_unpublished_alarms(active_alarms, validated_data.device_id, request_id)
@@ -75,13 +79,26 @@ class AlarmHandler:
                     )
                     
                     if should_trigger:
-                        # Create alert
-                        alert_id = await self._create_alert(
-                            alarm, validated_data, trigger_value, request_id
-                        )
-                        if alert_id:
-                            created_alert_ids.append(str(alert_id))
-                            logger.info(f"[{request_id}] Created alert {alert_id} for alarm {alarm.name} on sensor {sensor_id}")
+                        # Check if there's already an active alert (end_date is null) for this alarm
+                        existing_active_alert = await self._get_active_alert_for_alarm(alarm.id, request_id)
+                        
+                        if existing_active_alert:
+                            logger.debug(f"[{request_id}] Alarm condition still met for alarm {alarm.name}: active alert {existing_active_alert.id} continues")
+                        else:
+                            # No active alert exists, create new one
+                            alert_id = await self._create_alert(
+                                alarm, validated_data, trigger_value, request_id
+                            )
+                            if alert_id:
+                                created_alert_ids.append(str(alert_id))
+                                logger.info(f"[{request_id}] Created alert {alert_id} for alarm {alarm.name} on sensor {sensor_id}")
+                    else:
+                        # Condition not met - check if we need to close an active alert
+                        existing_active_alert = await self._get_active_alert_for_alarm(alarm.id, request_id)
+                        
+                        if existing_active_alert:
+                            await self._close_active_alert(existing_active_alert.id, request_id)
+                            logger.info(f"[{request_id}] Closed alert {existing_active_alert.id} for alarm {alarm.name}: condition no longer met")
                     
                 except Exception as e:
                     logger.error(f"[{request_id}] Error processing alarm {alarm.id}: {e}")
@@ -111,16 +128,6 @@ class AlarmHandler:
             Tuple of (should_trigger, trigger_value)
         """
         try:
-            # Check if the alarm's datatype matches the validated data's datatype
-            # Look for datatype_id in metadata
-            data_datatype_id = None
-            if validated_data.metadata and 'datatype_id' in validated_data.metadata:
-                data_datatype_id = validated_data.metadata['datatype_id']
-            
-            if data_datatype_id and str(alarm.datatype_id) != str(data_datatype_id):
-                logger.debug(f"[{request_id}] Alarm datatype {alarm.datatype_id} doesn't match data datatype {data_datatype_id}")
-                return False, None
-            
             # Get the field value from validated data
             field_value = self._extract_field_value(alarm, validated_data)
             if field_value is None:
@@ -147,6 +154,7 @@ class AlarmHandler:
     def _extract_field_value(self, alarm: Any, validated_data: ValidatedOutput) -> Any:
         """
         Extract the field value from validated data based on alarm configuration.
+        Uses field_label to match the correct value from the values array.
         
         Args:
             alarm: Alarm domain model object
@@ -155,25 +163,18 @@ class AlarmHandler:
         Returns:
             Field value or None if not found
         """
-        field_name = alarm.field_name
+        field_label = alarm.field_label
         
-        # Check if field exists in validated data values
-        if hasattr(validated_data, 'values') and validated_data.values:
-            # If values is a list, take the first value (most common case)
-            if isinstance(validated_data.values, list) and validated_data.values:
-                return validated_data.values[0]
-            # If values is a dict, look for the specific field
-            elif isinstance(validated_data.values, dict):
-                return validated_data.values.get(field_name)
-            # If values is a single value
-            else:
-                return validated_data.values
-        
-        # Check metadata if field not found in values
-        if hasattr(validated_data, 'metadata') and validated_data.metadata:
-            return validated_data.metadata.get(field_name)
-        
-        return None
+        # Find the index of the field_label in the labels array
+        try:
+            field_index = validated_data.labels.index(field_label)
+            return validated_data.values[field_index]
+        except ValueError:
+            logger.warning(f"Field label '{field_label}' not found in labels {validated_data.labels}")
+            return None
+        except IndexError:
+            logger.warning(f"Field label '{field_label}' found at index {field_index} but values array has only {len(validated_data.values)} elements")
+            return None
     
     def _evaluate_math_condition(
         self, 
@@ -238,15 +239,16 @@ class AlarmHandler:
             triggered_at = validated_data.timestamp or datetime.utcnow()
             alert_message = self._generate_alert_message(alarm, trigger_value)
             
-            # Prepare alert data for database
+            # Prepare alert data for database (matching API structure)
             alert_data = {
-                "alarm_id": alarm.id,
-                "triggered_at": triggered_at,
-                "value": trigger_value,
+                "name": alarm.name,
                 "message": alert_message,
-                "level": alarm.level,
-                "resolved": False,
-                "acknowledged": False
+                "treated": False,
+                "start_date": triggered_at,
+                "error_value": trigger_value,
+                "alarm_id": str(alarm.id),
+                "sensor_id": str(alarm.sensor_id),
+                "mq_published_at": None  # Will be set after successful Kafka publishing
             }
             
             # Create alert using repository
@@ -260,25 +262,30 @@ class AlarmHandler:
                     kafka_alert = AlertMessage(
                         request_id=request_id or str(uuid.uuid4()),
                         timestamp=triggered_at,
-                        alert_id=str(alert_id),
+                        id=str(alert_id),
+                        name=alarm.name,
+                        message=alert_message,
+                        treated=False,
+                        start_date=triggered_at,
+                        error_value=trigger_value,
+                        # Additional message bus context fields
                         alarm_id=str(alarm.id),
                         sensor_id=str(alarm.sensor_id),
                         device_id=validated_data.device_id,
-                        alarm_name=alarm.name,
                         alarm_type=str(alarm.alarm_type),
                         field_name=alarm.field_name,
-                        trigger_value=trigger_value,
                         threshold=alarm.threshold,
                         math_operator=str(alarm.math_operator),
                         level=alarm.level,
-                        message=alert_message,
-                        triggered_at=triggered_at,
                         recipients=getattr(alarm, 'recipients', None),
                         notify_creator=getattr(alarm, 'notify_creator', True)
                     )
                     
                     self.kafka_producer.publish_alert(kafka_alert)
                     logger.debug(f"[{request_id}] Published alert {alert_id} to Kafka")
+                    
+                    # Mark alert as published after successful Kafka publishing
+                    await self._mark_alert_as_published(alert_id, request_id)
                     
                 except Exception as kafka_error:
                     logger.error(f"[{request_id}] Failed to publish alert {alert_id} to Kafka: {kafka_error}")
@@ -425,21 +432,23 @@ class AlarmHandler:
             kafka_alarm = AlarmMessage(
                 request_id=request_id or str(uuid.uuid4()),
                 timestamp=datetime.utcnow(),
-                alarm_id=str(alarm.id),
-                sensor_id=str(alarm.sensor_id),
-                device_id=device_id,
-                datatype_id=str(alarm.datatype_id),
-                alarm_name=alarm.name,
+                id=str(alarm.id),
+                name=alarm.name,
                 description=alarm.description,
-                alarm_type=str(alarm.alarm_type),
-                field_name=alarm.field_name,
-                threshold=alarm.threshold,
-                math_operator=str(alarm.math_operator),
                 level=alarm.level,
+                math_operator=str(alarm.math_operator),
                 active=alarm.active,
+                threshold=alarm.threshold,
+                field_name=alarm.field_name,
+                field_label=getattr(alarm, 'field_label', alarm.field_name),
+                datatype_id=str(alarm.datatype_id),
+                sensor_id=str(alarm.sensor_id),
+                alarm_type=str(alarm.alarm_type),
                 user_id=str(alarm.user_id),
                 recipients=getattr(alarm, 'recipients', None),
                 notify_creator=getattr(alarm, 'notify_creator', True),
+                # Additional message bus context fields
+                device_id=device_id,
                 created_at=getattr(alarm, 'created_at', datetime.utcnow()),
                 updated_at=getattr(alarm, 'updated_at', datetime.utcnow())
             )
@@ -474,6 +483,92 @@ class AlarmHandler:
             
         except Exception as e:
             logger.error(f"[{request_id}] Failed to mark alarm {alarm_id} as published: {e}")
+            raise
+    
+    async def _mark_alert_as_published(
+        self, 
+        alert_id: uuid.UUID, 
+        request_id: Optional[str] = None
+    ) -> None:
+        """
+        Mark an alert as published by updating the mq_published_at field.
+        
+        Args:
+            alert_id: UUID of the alert to mark as published
+            request_id: Optional request ID for tracing
+        """
+        try:
+            # Update the alert's mq_published_at field
+            update_data = {
+                "mq_published_at": datetime.utcnow()
+            }
+            
+            await self.alert_repository.update(alert_id, update_data)
+            logger.debug(f"[{request_id}] Marked alert {alert_id} as published to message queue")
+            
+        except Exception as e:
+            logger.error(f"[{request_id}] Failed to mark alert {alert_id} as published: {e}")
+            raise
+    
+    async def _get_active_alert_for_alarm(
+        self, 
+        alarm_id: uuid.UUID, 
+        request_id: Optional[str] = None
+    ) -> Optional[Any]:
+        """
+        Get the active alert (end_date is null) for a specific alarm.
+        
+        Args:
+            alarm_id: UUID of the alarm to check for active alerts
+            request_id: Optional request ID for tracing
+            
+        Returns:
+            Active alert object or None if no active alert exists
+        """
+        try:
+            # Find alerts for this alarm where end_date is null (active alerts)
+            active_alerts = await self.alert_repository.find_by(
+                alarm_id=alarm_id,
+                treated=False,
+                end_date=None  # This indicates an active alert
+            )
+            
+            if active_alerts:
+                # There should only be one active alert per alarm at a time
+                if len(active_alerts) > 1:
+                    logger.warning(f"[{request_id}] Found {len(active_alerts)} active alerts for alarm {alarm_id}, expected only 1")
+                
+                return active_alerts[0]  # Return the first (or only) active alert
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"[{request_id}] Error finding active alert for alarm {alarm_id}: {e}")
+            return None
+    
+    async def _close_active_alert(
+        self, 
+        alert_id: uuid.UUID, 
+        request_id: Optional[str] = None
+    ) -> None:
+        """
+        Close an active alert by setting its end_date.
+        
+        Args:
+            alert_id: UUID of the alert to close
+            request_id: Optional request ID for tracing
+        """
+        try:
+            # Update the alert's end_date to mark it as resolved
+            update_data = {
+                "end_date": datetime.utcnow()
+            }
+            
+            await self.alert_repository.update(alert_id, update_data)
+            logger.debug(f"[{request_id}] Closed alert {alert_id} by setting end_date")
+            
+        except Exception as e:
+            logger.error(f"[{request_id}] Failed to close alert {alert_id}: {e}")
             raise
     
     async def republish_all_unpublished_alarms(self, request_id: Optional[str] = None) -> Dict[str, Any]:

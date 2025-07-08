@@ -94,7 +94,7 @@ class NormalizerService:
         self.alarm_handler = None
         if alarm_repository and alert_repository:
             # Note: kafka_producer will be set later in run() method
-            self.alarm_handler = AlarmHandler(alarm_repository, alert_repository)
+            self.alarm_handler = AlarmHandler(alarm_repository, alert_repository, self.kafka_producer)
             logger.info("Alarm handler initialized with alarm and alert repositories")
         else:
             logger.warning("Alarm handler not initialized - alarm or alert repository not provided")

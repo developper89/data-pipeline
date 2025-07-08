@@ -35,7 +35,7 @@ class AlarmsConsumer:
         # Structure: {device_id: [alarm_config1, alarm_config2, ...]}
         self.device_alarms: Dict[str, List[Dict[str, Any]]] = {}
         
-        # Index alarms by alarm_id for quick lookups
+        # Index alarms by id for quick lookups
         # Structure: {alarm_id: alarm_config}
         self.alarms_by_id: Dict[str, Dict[str, Any]] = {}
         
@@ -143,12 +143,12 @@ class AlarmsConsumer:
         """
         try:
             # Extract required fields
-            alarm_id = alarm_data.get('alarm_id')
+            alarm_id = alarm_data.get('id')
             device_id = alarm_data.get('device_id')
             request_id = alarm_data.get('request_id', 'unknown')
             
             if not alarm_id or not device_id:
-                logger.error(f"[{request_id}] Invalid alarm message: missing alarm_id or device_id")
+                logger.error(f"[{request_id}] Invalid alarm message: missing id or device_id")
                 return
             
             # Add processing timestamp
@@ -164,7 +164,7 @@ class AlarmsConsumer:
             # Check if this alarm already exists for the device (update case)
             existing_index = None
             for i, existing_alarm in enumerate(self.device_alarms[device_id]):
-                if existing_alarm.get('alarm_id') == alarm_id:
+                if existing_alarm.get('id') == alarm_id:
                     existing_index = i
                     break
             
@@ -308,7 +308,7 @@ class AlarmsConsumer:
         if device_id and device_id in self.device_alarms:
             self.device_alarms[device_id] = [
                 alarm for alarm in self.device_alarms[device_id] 
-                if alarm.get('alarm_id') != alarm_id
+                if alarm.get('id') != alarm_id
             ]
             
             # Clean up empty device entries
@@ -336,7 +336,7 @@ class AlarmsConsumer:
         
         # Remove from alarm ID index
         for alarm in device_alarms:
-            alarm_id = alarm.get('alarm_id')
+            alarm_id = alarm.get('id')
             if alarm_id:
                 self.alarms_by_id.pop(alarm_id, None)
         

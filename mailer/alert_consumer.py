@@ -158,13 +158,13 @@ class AlertConsumer:
             alert_data: The alert data from Kafka
         """
         try:
-            alert_id = alert_data.get('alert_id', 'unknown')
+            alert_id = alert_data.get('id', 'unknown')
             recipients = alert_data.get('recipients', [])
             notify_creator = alert_data.get('notify_creator', False)
             
             # Validate alert data
             if not alert_id:
-                logger.error("Invalid alert message: missing alert_id")
+                logger.error("Invalid alert message: missing id")
                 return
             
             if not recipients and not notify_creator:
@@ -210,7 +210,7 @@ class AlertConsumer:
             logger.exception(f"Error processing alert: {e}")
             self.stats['errors'] += 1
             await self._send_error(
-                alert_data.get('alert_id', 'unknown'), 
+                alert_data.get('id', 'unknown'), 
                 f"Error processing alert: {str(e)}", 
                 alert_data
             )
@@ -224,7 +224,7 @@ class AlertConsumer:
             error_data = {
                 'service': config.SERVICE_NAME,
                 'error_type': 'email_processing_error',
-                'alert_id': alert_id,
+                'alert_id': alert_id,  # Keep alert_id for error tracking
                 'error_message': error_message,
                 'timestamp': time.time(),
                 'original_alert': alert_data

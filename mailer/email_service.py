@@ -79,7 +79,7 @@ class EmailService:
                 </div>
                 
                 <div class="alert-box alert-{{ alert.level.lower() }}">
-                    <h2>{{ alert.alarm_name }}</h2>
+                    <h2>{{ alert.name }}</h2>
                     <p><strong>{{ alert.message }}</strong></p>
                 </div>
                 
@@ -91,15 +91,15 @@ class EmailService:
                         <tr><th>Alert Level</th><td>{{ alert.level }}</td></tr>
                         <tr><th>Alert Type</th><td>{{ alert.alarm_type }}</td></tr>
                         <tr><th>Field</th><td>{{ alert.field_name }}</td></tr>
-                        <tr><th>Trigger Value</th><td>{{ alert.trigger_value }}</td></tr>
+                        <tr><th>Trigger Value</th><td>{{ alert.error_value }}</td></tr>
                         <tr><th>Threshold</th><td>{{ alert.threshold }} ({{ alert.math_operator }})</td></tr>
-                        <tr><th>Triggered At</th><td>{{ alert.triggered_at }}</td></tr>
+                        <tr><th>Triggered At</th><td>{{ alert.start_date }}</td></tr>
                     </table>
                 </div>
                 
                 <div class="footer">
                     <p>This is an automated alert from the Preservarium monitoring system.</p>
-                    <p>Alert ID: {{ alert.alert_id }}</p>
+                    <p>Alert ID: {{ alert.id }}</p>
                 </div>
             </div>
         </body>
@@ -171,14 +171,14 @@ class EmailService:
             html_body = template.render(alert=alert_data)
             
             # Generate subject
-            subject = f"🚨 Alert: {alert_data.get('alarm_name', 'Unknown')} - {alert_data.get('device_id', 'Unknown Device')}"
+            subject = f"🚨 Alert: {alert_data.get('name', 'Unknown')} - {alert_data.get('device_id', 'Unknown Device')}"
             
             return subject, html_body
             
         except Exception as e:
             logger.error(f"Error rendering email template: {e}")
             # Fallback to simple text
-            subject = f"Alert: {alert_data.get('alarm_name', 'System Alert')}"
+            subject = f"Alert: {alert_data.get('name', 'System Alert')}"
             html_body = f"""
             <html>
             <body>
@@ -186,7 +186,7 @@ class EmailService:
             <p><strong>Message:</strong> {alert_data.get('message', 'Alert triggered')}</p>
             <p><strong>Device:</strong> {alert_data.get('device_id', 'Unknown')}</p>
             <p><strong>Level:</strong> {alert_data.get('level', 'Unknown')}</p>
-            <p><strong>Time:</strong> {alert_data.get('triggered_at', 'Unknown')}</p>
+            <p><strong>Time:</strong> {alert_data.get('start_date', 'Unknown')}</p>
             </body>
             </html>
             """
@@ -230,7 +230,7 @@ class EmailService:
             with self._create_smtp_connection() as smtp:
                 smtp.send_message(msg, to_addrs=recipients)
             
-            logger.info(f"Alert email sent to {len(recipients)} recipients for alert {alert_data.get('alert_id')}")
+            logger.info(f"Alert email sent to {len(recipients)} recipients for alert {alert_data.get('id')}")
             return True
             
         except Exception as e:

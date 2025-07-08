@@ -117,7 +117,7 @@ class NormalizerKafkaProducer:
 
             logger.debug(f"[{message.request_id}] Publishing AlertMessage to topic '{topic}' with key '{key}'")
             publish_message(self.producer, topic, value, key)
-            logger.info(f"[{message.request_id}] Successfully published alert {message.alert_id} for alarm '{message.alarm_name}' to topic '{topic}'")
+            logger.info(f"[{message.request_id}] Successfully published alert {message.id} for alarm '{message.name}' to topic '{topic}'")
         except KafkaError as e:
             logger.error(f"[{message.request_id}] Failed to publish AlertMessage to Kafka topic '{topic}': {e}")
             raise # Re-raise Kafka specific errors
@@ -144,14 +144,14 @@ class NormalizerKafkaProducer:
             return # Don't raise an error, just skip if not configured
 
         try:
-            # Use alarm_id as the key for partitioning alarms
-            key = message.alarm_id
+            # Use alarm id as the key for partitioning alarms
+            key = message.id
             topic = config.KAFKA_ALARMS_TOPIC
             value = message.model_dump()
 
             logger.debug(f"[{message.request_id}] Publishing AlarmMessage to topic '{topic}' with key '{key}'")
             publish_message(self.producer, topic, value, key)
-            logger.info(f"[{message.request_id}] Successfully published alarm {message.alarm_id} '{message.alarm_name}' to topic '{topic}'")
+            logger.info(f"[{message.request_id}] Successfully published alarm {message.id} '{message.name}' to topic '{topic}'")
         except KafkaError as e:
             logger.error(f"[{message.request_id}] Failed to publish AlarmMessage to Kafka topic '{topic}': {e}")
             raise # Re-raise Kafka specific errors

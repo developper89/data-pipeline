@@ -671,20 +671,74 @@ class AlarmHandler:
         request_id: Optional[str] = None
     ) -> None:
         """
-        Close an active alert by setting its end_date.
+        Close an active alert by setting its end_date and treated status.
+        Also publishes resolution notification to Kafka for email alerts.
         
         Args:
             alert_id: UUID of the alert to close
             request_id: Optional request ID for tracing
         """
         try:
-            # Update the alert's end_date to mark it as resolved
+            # First get the current alert to retrieve alarm information
+            alert = await self.alert_repository.get_by_id(alert_id)
+            if not alert:
+                logger.error(f"[{request_id}] Alert {alert_id} not found for closing")
+                return
+            
+            # Get the associated alarm for notification details
+            alarm = await self.alarm_repository.get_by_id(uuid.UUID(alert.alarm_id))
+            if not alarm:
+                logger.error(f"[{request_id}] Alarm {alert.alarm_id} not found for alert {alert_id}")
+            
+            # Update the alert's end_date and treated status to mark it as resolved
+            closed_at = datetime.utcnow()
             update_data = {
-                "end_date": datetime.utcnow()
+                "end_date": closed_at,
+                "treated": True
             }
             
             await self.alert_repository.update(alert_id, update_data)
-            logger.debug(f"[{request_id}] Closed alert {alert_id} by setting end_date")
+            logger.debug(f"[{request_id}] Closed alert {alert_id} by setting end_date and treated=True")
+            
+            # Publish resolution notification to Kafka if producer is available and alarm exists
+            if self.kafka_producer and alarm:
+                try:
+                    # Create resolution alert message for email notification
+                    resolution_message = f"RESOLVED: Alarm '{alarm.name}' condition no longer met"
+                    
+                    kafka_alert = AlertMessage(
+                        request_id=request_id or str(uuid.uuid4()),
+                        timestamp=closed_at,
+                        id=str(alert_id),  # Use the same alert ID
+                        name=f"RESOLVED: {alarm.name}",
+                        message=resolution_message,
+                        treated=True,
+                        start_date=alert.start_date,
+                        end_date=closed_at,
+                        error_value=alert.error_value,
+                        # Additional message bus context fields
+                        alarm_id=str(alarm.id),
+                        sensor_id=str(alarm.sensor_id),
+                        device_id=getattr(alert, 'device_id', 'unknown'),
+                        alarm_type=str(alarm.alarm_type),
+                        field_name=alarm.field_name,
+                        threshold=alarm.threshold,
+                        math_operator=str(alarm.math_operator),
+                        level=alarm.level.name,  # Convert enum to string
+                        recipients=getattr(alarm, 'recipients', None),
+                        notify_creator=getattr(alarm, 'notify_creator', True),
+                        alarm_creator_full_name=getattr(alarm, 'creator_full_name', None),
+                        alarm_creator_email=getattr(alarm, 'creator_email', None)
+                    )
+                    
+                    self.kafka_producer.publish_alert(kafka_alert)
+                    logger.info(f"[{request_id}] Published resolution notification for alert {alert_id} to Kafka")
+                    
+                except Exception as kafka_error:
+                    logger.error(f"[{request_id}] Failed to publish resolution notification for alert {alert_id} to Kafka: {kafka_error}")
+                    # Don't fail the entire alert closure if Kafka publishing fails
+            else:
+                logger.debug(f"[{request_id}] Kafka producer not available or alarm not found, skipping resolution notification")
             
         except Exception as e:
             logger.error(f"[{request_id}] Failed to close alert {alert_id}: {e}")

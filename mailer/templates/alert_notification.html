@@ -20,6 +20,9 @@
         text-align: center;
         border-radius: 8px 8px 0 0;
       }
+      .header.resolved {
+        background-color: #28a745;
+      }
       .content {
         background-color: #f8f9fa;
         padding: 20px;
@@ -83,9 +86,15 @@
     </style>
   </head>
   <body>
-    <div class="header">
+    <div
+      class="header{% if alert.name.startswith('RESOLVED:') %} resolved{% endif %}"
+    >
+      {% if alert.name.startswith('RESOLVED:') %}
+      <h1>✅ Alert Resolved</h1>
+      {% else %}
       <h1>🚨 Alert Notification</h1>
-      <p>{{ alert.alarm_name }}</p>
+      {% endif %}
+      <p>{{ alert.name }}</p>
     </div>
 
     <div class="content">

@@ -81,6 +81,7 @@ class EmailService:
                 body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background-color: #f5f5f5; }
                 .container { max-width: 600px; margin: 0 auto; background-color: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
                 .header { background-color: #dc3545; color: white; padding: 20px; margin: -30px -30px 20px -30px; border-radius: 8px 8px 0 0; }
+                .header.resolved { background-color: #28a745; }
                 .alert-high { border-left: 4px solid #dc3545; }
                 .alert-critical { border-left: 4px solid #721c24; background-color: #f8d7da; }
                 .alert-medium { border-left: 4px solid #fd7e14; }
@@ -95,8 +96,12 @@ class EmailService:
         </head>
         <body>
             <div class="container">
-                <div class="header">
-                    <h1>🚨 Alert Notification</h1>
+                <div class="header{% if alert.name.startswith('RESOLVED:') %} resolved{% endif %}">
+                    {% if alert.name.startswith('RESOLVED:') %}
+                        <h1>✅ Alert Resolved</h1>
+                    {% else %}
+                        <h1>🚨 Alert Notification</h1>
+                    {% endif %}
                 </div>
                 
                 <div class="alert-box alert-{{ alert.level|alert_level_class }}">
@@ -194,8 +199,12 @@ class EmailService:
             # Render template
             html_body = template.render(alert=alert_data)
             
-            # Generate subject
-            subject = f"🚨 Alert: {alert_data.get('name', 'Unknown')} - {alert_data.get('device_id', 'Unknown Device')}"
+            # Generate subject - check if it's a resolution alert
+            alert_name = alert_data.get('name', 'Unknown')
+            if alert_name.startswith('RESOLVED:'):
+                subject = f"✅ {alert_name} - {alert_data.get('device_id', 'Unknown Device')}"
+            else:
+                subject = f"🚨 Alert: {alert_name} - {alert_data.get('device_id', 'Unknown Device')}"
             
             return subject, html_body
             

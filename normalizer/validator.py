@@ -81,7 +81,7 @@ class Validator:
         expected_types = []
         if hasattr(datatype, 'data_type') and datatype.data_type:
             expected_types = datatype.data_type
-            
+
         type_valid, converted_values, type_errors = self._validate_type(
             values, 
             expected_types
@@ -462,11 +462,11 @@ class Validator:
                     converted_values.append(float(value))
                 elif expected_type == DatatypeType.BOOLEAN:
                     if isinstance(value, bool):
-                        converted_values.append(int(value))
+                        converted_values.append(bool(value))
                     elif isinstance(value, str):
-                        converted_values.append(int(value.lower() in ('true', 'yes', '1')))
+                        converted_values.append(value.lower() in ('true', 'yes', '1'))
                     else:
-                        converted_values.append(int(bool(value)))
+                        converted_values.append(bool(value))
                 elif expected_type == DatatypeType.STRING:
                     converted_values.append(str(value))
                 elif expected_type == DatatypeType.DATETIME:

@@ -29,6 +29,10 @@
       .alert-high {
         border-left: 4px solid #dc3545;
       }
+      .alert-critical {
+        border-left: 4px solid #721c24;
+        background-color: #f8d7da;
+      }
       .alert-medium {
         border-left: 4px solid #fd7e14;
       }
@@ -85,7 +89,7 @@
     </div>
 
     <div class="content">
-      <div class="alert-box alert-{{ alert.level.lower() }}">
+      <div class="alert-box alert-{{ alert.level|alert_level_class }}">
         <h2>{{ alert.message }}</h2>
         <p><strong>Device:</strong> {{ alert.device_id }}</p>
         <p><strong>Severity:</strong> {{ alert.level }}</p>

@@ -5,7 +5,6 @@ import json
 from typing import Dict, Any, List
 import time
 
-from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 
 from shared.mq.kafka_helpers import create_kafka_consumer, create_kafka_producer
@@ -179,6 +178,17 @@ class AlertConsumer:
             if not isinstance(recipients, list):
                 recipients = []
             
+            # Add creator email if notify_creator is true
+            if notify_creator:
+                creator_email = alert_data.get('alarm_creator_email')
+                creator_name = alert_data.get('alarm_creator_full_name')
+                if creator_email and isinstance(creator_email, str):
+                    recipients.append(creator_email.strip())
+                    creator_info = f"{creator_name} ({creator_email})" if creator_name else creator_email
+                    logger.debug(f"[{alert_id}] Added creator {creator_info} to recipients")
+                else:
+                    logger.warning(f"[{alert_id}] notify_creator is true but creator email not found or invalid")
+            
             # Filter out invalid email addresses
             valid_recipients = []
             for email in recipients:
@@ -187,18 +197,26 @@ class AlertConsumer:
                 else:
                     logger.warning(f"[{alert_id}] Invalid email address: {email}")
             
-            if not valid_recipients:
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_recipients = []
+            for email in valid_recipients:
+                if email not in seen:
+                    seen.add(email)
+                    unique_recipients.append(email)
+            
+            if not unique_recipients:
                 logger.warning(f"[{alert_id}] No valid email recipients found")
                 return
             
-            logger.info(f"[{alert_id}] Processing alert for {len(valid_recipients)} recipients")
+            logger.info(f"[{alert_id}] Processing alert for {len(unique_recipients)} recipients")
             
             # Send email with retry logic
-            success = self.email_service.send_alert_email_with_retry(alert_data, valid_recipients)
+            success = self.email_service.send_alert_email_with_retry(alert_data, unique_recipients)
             
             if success:
                 self.stats['emails_sent'] += 1
-                logger.info(f"[{alert_id}] Successfully sent alert email to {len(valid_recipients)} recipients")
+                logger.info(f"[{alert_id}] Successfully sent alert email to {len(unique_recipients)} recipients")
             else:
                 self.stats['emails_failed'] += 1
                 logger.error(f"[{alert_id}] Failed to send alert email after all retry attempts")

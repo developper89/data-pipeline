@@ -7,8 +7,8 @@ import uuid
 
 from shared.models.common import ValidatedOutput, ErrorMessage, AlertMessage, AlarmMessage
 
-# Import the MathOperator enum for direct comparison
-from preservarium_sdk.domain.model.alarm import MathOperator
+# Import the alarm enums for direct comparison
+from preservarium_sdk.domain.model.alarm import MathOperator, AlarmType, AlarmLevel
 
 logger = logging.getLogger("alarm_handler")
 
@@ -36,7 +36,7 @@ class AlarmHandler:
         sensor_id: str,
         validated_data: ValidatedOutput,
         request_id: Optional[str] = None
-    ) -> List[str]:
+    ) -> Dict[str, Any]:
         """
         Process alarms for validated sensor data and create alerts if conditions are met.
         
@@ -46,10 +46,15 @@ class AlarmHandler:
             request_id: Optional request ID for tracing
             
         Returns:
-            List of alert IDs that were created
+            Dictionary containing:
+            - alert_ids: List of alert IDs that were created
+            - triggered_alarms: List of alarm objects that were triggered
+            - has_critical_status_alarm: Boolean indicating if any critical status alarm was triggered
         """
         try:
             created_alert_ids = []
+            triggered_alarms = []
+            has_critical_status_alarm = False
             
             # Get datatype_id from validated data metadata
             data_datatype_id = validated_data.metadata['datatype_id']
@@ -62,8 +67,12 @@ class AlarmHandler:
             )
             
             if not active_alarms:
-                logger.debug(f"[{request_id}] No active alarms found for sensor {validated_data.device_id} and datatype {data_datatype_id}")
-                return created_alert_ids
+
+                return {
+                    "alert_ids": created_alert_ids,
+                    "triggered_alarms": triggered_alarms,
+                    "has_critical_status_alarm": has_critical_status_alarm
+                }
             
             logger.debug(f"[{request_id}] Found {len(active_alarms)} active alarms for sensor {validated_data.device_id} and datatype {data_datatype_id}")
             
@@ -79,6 +88,14 @@ class AlarmHandler:
                     )
                     
                     if should_trigger:
+                        # Track triggered alarm
+                        triggered_alarms.append(alarm)
+                        
+                        # Check if this is a critical status alarm
+                        if alarm.alarm_type == AlarmType.STATUS and alarm.level == AlarmLevel.CRITICAL:
+                            has_critical_status_alarm = True
+                            logger.warning(f"[{request_id}] Critical status alarm triggered: {alarm.name} - data will be published but not persisted")
+                        
                         # Check if there's already an active alert (end_date is null) for this alarm
                         existing_active_alert = await self._get_active_alert_for_alarm(alarm.id, request_id)
                         
@@ -104,11 +121,19 @@ class AlarmHandler:
                     logger.error(f"[{request_id}] Error processing alarm {alarm.id}: {e}")
                     continue
             
-            return created_alert_ids
+            return {
+                "alert_ids": created_alert_ids,
+                "triggered_alarms": triggered_alarms,
+                "has_critical_status_alarm": has_critical_status_alarm
+            }
             
         except Exception as e:
             logger.exception(f"[{request_id}] Error processing alarms for sensor {sensor_id}: {e}")
-            return []
+            return {
+                "alert_ids": [],
+                "triggered_alarms": [],
+                "has_critical_status_alarm": False
+            }
     
     def _evaluate_alarm_condition(
         self, 
@@ -134,17 +159,23 @@ class AlarmHandler:
                 logger.debug(f"[{request_id}] Field '{alarm.field_name}' not found in validated data")
                 return False, None
             
+            # Get the expected data type for this field
+            expected_type = self._get_field_expected_type(alarm, validated_data, request_id)
+            
+            # Convert threshold to the expected type for comparison
+            converted_threshold = self._convert_threshold_to_expected_type(alarm.threshold, expected_type)
+            
             # Values are already converted by the validator, use them directly
             # Evaluate condition based on alarm type and math operator
             condition_met = self._evaluate_math_condition(
-                field_value, alarm.math_operator, alarm.threshold
+                field_value, alarm.math_operator, converted_threshold
             )
             
             if condition_met:
-                logger.debug(f"[{request_id}] Alarm condition met: {field_value} {alarm.math_operator} {alarm.threshold}")
+                logger.debug(f"[{request_id}] Alarm condition met: {field_value} {alarm.math_operator} {converted_threshold} (original: {alarm.threshold})")
                 return True, field_value
             else:
-                logger.debug(f"[{request_id}] Alarm condition not met: {field_value} {alarm.math_operator} {alarm.threshold}")
+                logger.debug(f"[{request_id}] Alarm condition not met: {field_value} {alarm.math_operator} {converted_threshold} (original: {alarm.threshold})")
                 return False, field_value
             
         except Exception as e:
@@ -176,6 +207,59 @@ class AlarmHandler:
             logger.warning(f"Field label '{field_label}' found at index {field_index} but values array has only {len(validated_data.values)} elements")
             return None
     
+    def _get_field_expected_type(self, alarm: Any, validated_data: ValidatedOutput, request_id: Optional[str] = None) -> type:
+        """
+        Get the expected data type for a specific field from the ValidatedOutput metadata.
+        
+        Args:
+            alarm: Alarm domain model object
+            validated_data: ValidatedOutput containing metadata with expected types
+            request_id: Optional request ID for tracing
+            
+        Returns:
+            Python type (bool, float, str, etc.) for the field
+        """
+        try:
+            # Get the field index from the labels array
+            field_label = alarm.field_label
+            field_index = validated_data.labels.index(field_label)
+            
+            # Get the expected types from metadata
+            expected_types = validated_data.metadata.get('datatype_type', [])
+            
+            # Get the expected type for this field index
+            if field_index < len(expected_types):
+                expected_type_str = expected_types[field_index]
+            elif expected_types:
+                # Use the last available type if array is shorter
+                expected_type_str = expected_types[-1]
+            else:
+                # Default to float if no type information available
+                logger.warning(f"[{request_id}] No expected type found for field '{field_label}', defaulting to float")
+                return float
+            
+            # Convert string representation to Python type
+            type_mapping = {
+                'boolean': bool,
+                'number': float,
+                'string': str,
+                'datetime': str,  # Keep as string for now
+                'list': list,
+                'object': dict,
+                'bytes': bytes
+            }
+            
+            python_type = type_mapping.get(expected_type_str, float)
+
+            return python_type
+            
+        except ValueError:
+            logger.warning(f"[{request_id}] Field label '{field_label}' not found in labels {validated_data.labels}")
+            return float  # Default to float
+        except Exception as e:
+            logger.error(f"[{request_id}] Error getting expected type for field '{alarm.field_label}': {e}")
+            return float  # Default to float
+    
     def _evaluate_math_condition(
         self, 
         value: Any, 
@@ -188,7 +272,7 @@ class AlarmHandler:
         Args:
             value: The measured value (any type)
             operator: MathOperator enum value
-            threshold: Threshold value to compare against (any type)
+            threshold: Threshold value to compare against (already converted to expected type)
             
         Returns:
             True if condition is met, False otherwise
@@ -214,7 +298,38 @@ class AlarmHandler:
             logger.warning(f"Cannot compare value '{value}' with threshold '{threshold}' using operator {operator}: {e}")
             return False
     
-
+    def _convert_threshold_to_expected_type(self, threshold: Any, expected_type: type) -> Any:
+        """
+        Convert threshold value to the expected type.
+        
+        Args:
+            threshold: The threshold value to convert
+            expected_type: The expected Python type
+            
+        Returns:
+            Converted threshold value
+        """
+        try:
+            if expected_type == bool:
+                # Convert numeric threshold to boolean
+                if isinstance(threshold, (int, float)):
+                    return bool(threshold)
+                elif isinstance(threshold, str):
+                    return threshold.lower() in ('true', 'yes', '1')
+                else:
+                    return bool(threshold)
+            elif expected_type == float:
+                return float(threshold)
+            elif expected_type == str:
+                return str(threshold)
+            elif expected_type == int:
+                return int(threshold)
+            else:
+                # For other types, try direct conversion
+                return expected_type(threshold)
+        except (ValueError, TypeError) as e:
+            logger.warning(f"Failed to convert threshold '{threshold}' to type {expected_type}: {e}")
+            return threshold  # Return original threshold if conversion fails
     
     async def _create_alert(
         self,
@@ -276,9 +391,11 @@ class AlarmHandler:
                         field_name=alarm.field_name,
                         threshold=alarm.threshold,
                         math_operator=str(alarm.math_operator),
-                        level=alarm.level,
+                        level=alarm.level.name,  # Convert enum to string
                         recipients=getattr(alarm, 'recipients', None),
-                        notify_creator=getattr(alarm, 'notify_creator', True)
+                        notify_creator=getattr(alarm, 'notify_creator', True),
+                        alarm_creator_full_name=getattr(alarm, 'creator_full_name', None),
+                        alarm_creator_email=getattr(alarm, 'creator_email', None)
                     )
                     
                     self.kafka_producer.publish_alert(kafka_alert)
@@ -435,7 +552,7 @@ class AlarmHandler:
                 id=str(alarm.id),
                 name=alarm.name,
                 description=alarm.description,
-                level=alarm.level,
+                level=alarm.level.name,  # Convert enum to string
                 math_operator=str(alarm.math_operator),
                 active=alarm.active,
                 threshold=alarm.threshold,
@@ -447,6 +564,8 @@ class AlarmHandler:
                 user_id=str(alarm.user_id),
                 recipients=getattr(alarm, 'recipients', None),
                 notify_creator=getattr(alarm, 'notify_creator', True),
+                creator_full_name=getattr(alarm, 'creator_full_name', None),
+                creator_email=getattr(alarm, 'creator_email', None),
                 # Additional message bus context fields
                 device_id=device_id,
                 created_at=getattr(alarm, 'created_at', datetime.utcnow()),

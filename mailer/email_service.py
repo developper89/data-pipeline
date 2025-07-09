@@ -42,12 +42,32 @@ class EmailService:
                 loader=FileSystemLoader(config.EMAIL_TEMPLATE_DIR),
                 autoescape=True
             )
+            # Add custom filters
+            self.template_env.filters['alert_level_class'] = self._alert_level_to_css_class
         except Exception as e:
             logger.warning(f"Could not load template directory {config.EMAIL_TEMPLATE_DIR}: {e}")
             self.template_env = None
         
         # Default template fallback
         self.default_template = self._get_default_template()
+        
+    def _alert_level_to_css_class(self, level):
+        """
+        Convert alert level string to CSS class name.
+        
+        Args:
+            level: Alert level string name (e.g., 'CRITICAL', 'WARNING', 'INFO')
+            
+        Returns:
+            CSS class name string
+        """
+        level_mapping = {
+            'CRITICAL': 'critical',
+            'WARNING': 'medium',
+            'INFO': 'low'
+        }
+        
+        return level_mapping.get(level.upper(), 'info')
         
     def _get_default_template(self) -> Template:
         """Get the default email template."""
@@ -62,6 +82,7 @@ class EmailService:
                 .container { max-width: 600px; margin: 0 auto; background-color: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
                 .header { background-color: #dc3545; color: white; padding: 20px; margin: -30px -30px 20px -30px; border-radius: 8px 8px 0 0; }
                 .alert-high { border-left: 4px solid #dc3545; }
+                .alert-critical { border-left: 4px solid #721c24; background-color: #f8d7da; }
                 .alert-medium { border-left: 4px solid #fd7e14; }
                 .alert-low { border-left: 4px solid #ffc107; }
                 .alert-info { border-left: 4px solid #17a2b8; }
@@ -78,7 +99,7 @@ class EmailService:
                     <h1>🚨 Alert Notification</h1>
                 </div>
                 
-                <div class="alert-box alert-{{ alert.level.lower() }}">
+                <div class="alert-box alert-{{ alert.level|alert_level_class }}">
                     <h2>{{ alert.name }}</h2>
                     <p><strong>{{ alert.message }}</strong></p>
                 </div>
@@ -109,8 +130,11 @@ class EmailService:
         if self.template_env:
             return self.template_env.from_string(default_html)
         else:
-            from jinja2 import Template
-            return Template(default_html)
+            from jinja2 import Template, Environment
+            # Create a temporary environment with the custom filter
+            temp_env = Environment()
+            temp_env.filters['alert_level_class'] = self._alert_level_to_css_class
+            return temp_env.from_string(default_html)
     
     def _check_rate_limit(self) -> bool:
         """
@@ -230,7 +254,7 @@ class EmailService:
             with self._create_smtp_connection() as smtp:
                 smtp.send_message(msg, to_addrs=recipients)
             
-            logger.info(f"Alert email sent to {len(recipients)} recipients for alert {alert_data.get('id')}")
+            logger.info(f"Alert email sent to {', '.join(recipients)} for alert {alert_data.get('id')}")
             return True
             
         except Exception as e:

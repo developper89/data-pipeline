@@ -7,7 +7,7 @@ import signal
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 
-from kafka import KafkaConsumer, KafkaProducer  # Still need KafkaProducer for creation
+from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 from pydantic import ValidationError
 
@@ -382,15 +382,34 @@ class NormalizerService:
                 try:
                     if self.alarm_handler and validated_data_list:
                         total_alerts_created = []
+                        any_critical_status_alarm = False
                         
                         for validated_data in validated_data_list:
                             # Process alarms for each validated output
-                            alert_ids = await self.alarm_handler.process_alarms(
+                            alarm_result = await self.alarm_handler.process_alarms(
                                 sensor_id=str(sensor.id),
                                 validated_data=validated_data,
                                 request_id=request_id
                             )
+                            
+                            # Extract results from the returned dictionary
+                            alert_ids = alarm_result.get("alert_ids", [])
+                            triggered_alarms = alarm_result.get("triggered_alarms", [])
+                            has_critical_status_alarm = alarm_result.get("has_critical_status_alarm", False)
+                            
                             total_alerts_created.extend(alert_ids)
+                            
+                            # Track if any critical status alarm was triggered across all validated data
+                            if has_critical_status_alarm:
+                                any_critical_status_alarm = True
+                        
+                        # If any critical status alarm was triggered, set persist flags to False for ALL validated data
+                        if any_critical_status_alarm:
+                            logger.warning(f"[{request_id}] Critical status alarm triggered for device {raw_message.device_id} - setting persist flags to False for all validated data")
+                            for validated_data in validated_data_list:
+                                persist_flags = validated_data.metadata['persist']
+                                validated_data.metadata['persist'] = [False] * len(persist_flags)
+                                logger.debug(f"[{request_id}] Set {len(persist_flags)} persist flags to False for validated data")
                         
                         if total_alerts_created:
                             logger.info(f"[{request_id}] Created {len(total_alerts_created)} alerts for device {raw_message.device_id}")
@@ -432,7 +451,7 @@ class NormalizerService:
                 error_published = True
                 return True
 
-            # 7. Publish Standardized Data to Kafka using the wrapper
+            # 7. Publish Validated Data to Kafka using the wrapper
             try:
                 # Ensure producer wrapper is available
                 if not self.kafka_producer:

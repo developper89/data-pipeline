@@ -21,4 +21,4 @@ fi
 
 # Start the mailer service
 echo "Starting mailer service..."
-exec python main.py 
+exec "$@"

@@ -3,6 +3,8 @@
 # Exit on any error
 set -e
 
+uv pip install --system -e /app/packages/preservarium-sdk[dev,core]
+
 echo "Starting Mailer Service..."
 
 # Wait for Kafka to be ready

@@ -22,7 +22,7 @@ SMTP_FROM_EMAIL = os.getenv("SMTP_FROM_EMAIL", "alerts@preservarium.com")
 SMTP_FROM_NAME = os.getenv("SMTP_FROM_NAME", "Preservarium Alert System")
 
 # Email Template Configuration
-EMAIL_TEMPLATE_DIR = os.getenv("EMAIL_TEMPLATE_DIR", "/app/templates")
+EMAIL_TEMPLATE_DIR = os.getenv("EMAIL_TEMPLATE_DIR", "/app/mailer/templates")
 DEFAULT_EMAIL_TEMPLATE = os.getenv("DEFAULT_EMAIL_TEMPLATE", "alert_notification.html")
 
 # Service Configuration

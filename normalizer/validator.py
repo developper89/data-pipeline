@@ -48,6 +48,8 @@ class Validator:
         """
         errors = []
         
+        datatype_name = str(datatype.category) if len(list(dict.fromkeys(datatype.display_names))) > 1 else datatype.display_names[0]
+        datatype.name = datatype_name
         # Check for auto-discovery and update datatype if enabled
         if datatype and datatype.auto_discovery:
             datatype = await self._perform_auto_discovery(datatype, standardized_data, device_id)
@@ -242,25 +244,16 @@ class Validator:
             
             if standardized_data.display_names:
                 # Use suggested display names with processing
-                if hasattr(datatype, 'display_names') and datatype.display_names and len(datatype.display_names) > 0:
-                    # Use first existing display name for all values
-                    first_display_name = datatype.display_names[0]
-                    datatype_display_names = [first_display_name] * num_values
-                else:
-                    datatype_display_names = []  # Empty since no existing display names
-
                 processed_display_names = self._process_display_name_replacement(
-                    standardized_data.display_names, datatype_display_names
+                    standardized_data.display_names, [datatype.name] * num_values
                 )
                 update_data['display_names'] = processed_display_names
                 updated = True
                 logger.debug(f"Auto-discovery: Updated display names for datatype {datatype.id}: {processed_display_names}")
-            elif hasattr(datatype, 'display_names') and datatype.display_names and len(datatype.display_names) > 0:
-                # Use first existing display name for all values
-                first_display_name = datatype.display_names[0]
-                update_data['display_names'] = [first_display_name] * num_values
+            else:
+                update_data['display_names'] = [datatype.name] * num_values
                 updated = True
-                logger.debug(f"Auto-discovery: Used existing first display name for datatype {datatype.id}: {first_display_name}")
+                logger.debug(f"Auto-discovery: Used existing display name for datatype {datatype.id}: {datatype.name}")
             
             # 6. Handle labels - use existing first value if available, otherwise use suggested value
             # Check if datatype already has labels values
@@ -540,6 +533,7 @@ class Validator:
         
         metadata = {
             "datatype_id": datatype.id,
+            "datatype_name": datatype.name,
             "datatype_unit": datatype.unit,
             "datatype_type": datatype_type_strings,
             "datatype_category": str(datatype.category),

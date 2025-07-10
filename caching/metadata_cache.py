@@ -85,10 +85,11 @@ class MetadataCache:
             )
             
             # Set expiration on readings hash
-            await self.redis_repository.redis_client.expire(
-                readings_key, 
-                ttl or self.config.metadata_ttl
-            )
+            if ttl is not None:
+                await self.redis_repository.redis_client.expire(
+                    readings_key, 
+                    ttl
+                )
             
             # Add device_id to the set of all devices
             await self.redis_repository.redis_client.sadd(self.config.devices_key, device_id)
@@ -96,10 +97,11 @@ class MetadataCache:
             # Add category to the set of categories for this device
             device_categories_key = f"device:{device_id}:categories"
             await self.redis_repository.redis_client.sadd(device_categories_key, category)
-            await self.redis_repository.redis_client.expire(
-                device_categories_key, 
-                ttl or self.config.metadata_ttl
-            )
+            if ttl is not None:
+                await self.redis_repository.redis_client.expire(
+                    device_categories_key, 
+                    ttl
+                )
             
             # Track the latest request_id for this device+category (for logging/debugging)
             if request_id:
@@ -107,7 +109,7 @@ class MetadataCache:
                 await self.redis_repository.redis_client.set(
                     current_request_key, 
                     request_id, 
-                    ex=ttl or self.config.metadata_ttl
+                    ex=ttl
                 )
             
             logger.debug(f"Cached latest reading for device {device_id}, category {category}, index {index}" + 

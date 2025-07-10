@@ -9,6 +9,7 @@ from shared.models.common import ValidatedOutput, ErrorMessage, AlertMessage, Al
 
 # Import the alarm enums for direct comparison
 from preservarium_sdk.domain.model.alarm import MathOperator, AlarmType, AlarmLevel
+from preservarium_sdk.core.utils import translate
 
 logger = logging.getLogger("alarm_handler")
 
@@ -20,17 +21,30 @@ class AlarmHandler:
     
     def __init__(self, alarm_repository, alert_repository, kafka_producer=None):
         """
-        Initialize the alarm handler with repositories for accessing alarms and creating alerts.
+        Initialize the AlarmHandler with required repositories and optional Kafka producer.
         
         Args:
-            alarm_repository: Repository for accessing alarm configurations
-            alert_repository: Repository for creating and managing alerts
-            kafka_producer: Optional Kafka producer for publishing alerts
+            alarm_repository: Repository for alarm CRUD operations
+            alert_repository: Repository for alert CRUD operations 
+            kafka_producer: Optional Kafka producer for publishing alerts/alarms
         """
         self.alarm_repository = alarm_repository
         self.alert_repository = alert_repository
         self.kafka_producer = kafka_producer
+    
+    def _get_language(self, request_id: Optional[str] = None) -> str:
+        """
+        Get the language for translations. Defaults to French as requested.
         
+        Args:
+            request_id: Optional request ID for tracing
+            
+        Returns:
+            Language code (default: 'fr')
+        """
+        # TODO: In the future, this could be determined from user preferences or request headers
+        return "fr"  # French as default language
+    
     async def process_alarms(
         self, 
         sensor_id: str,
@@ -114,7 +128,7 @@ class AlarmHandler:
                         existing_active_alert = await self._get_active_alert_for_alarm(alarm.id, request_id)
                         
                         if existing_active_alert:
-                            await self._close_active_alert(existing_active_alert.id, request_id)
+                            await self._close_active_alert(existing_active_alert.id, validated_data.device_id, request_id)
                             logger.info(f"[{request_id}] Closed alert {existing_active_alert.id} for alarm {alarm.name}: condition no longer met")
                     
                 except Exception as e:
@@ -352,7 +366,7 @@ class AlarmHandler:
         """
         try:
             triggered_at = validated_data.timestamp or datetime.utcnow()
-            alert_message = self._generate_alert_message(alarm, trigger_value)
+            alert_message = self._generate_alert_message(alarm, trigger_value, request_id)
             
             # Prepare alert data for database (matching API structure)
             alert_data = {
@@ -383,14 +397,16 @@ class AlarmHandler:
                         treated=False,
                         start_date=triggered_at,
                         error_value=trigger_value,
+                        is_resolved=False,  # This is a new alert, not resolved
                         # Additional message bus context fields
                         alarm_id=str(alarm.id),
                         sensor_id=str(alarm.sensor_id),
+                        sensor_name=alarm.sensor_name,
                         device_id=validated_data.device_id,
-                        alarm_type=str(alarm.alarm_type),
+                        alarm_type=alarm.alarm_type.value,  # Use .value to get "Measure" or "Status"
                         field_name=alarm.field_name,
                         threshold=alarm.threshold,
-                        math_operator=str(alarm.math_operator),
+                        math_operator=alarm.math_operator.value,  # Use .value to get the symbol like ">"
                         level=alarm.level.name,  # Convert enum to string
                         recipients=getattr(alarm, 'recipients', None),
                         notify_creator=getattr(alarm, 'notify_creator', True),
@@ -416,35 +432,54 @@ class AlarmHandler:
             logger.error(f"[{request_id}] Failed to create alert for alarm {alarm.id}: {e}")
             return None
     
-    def _generate_alert_message(self, alarm: Any, trigger_value: float) -> str:
+    def _translate_math_operator(self, operator: MathOperator, lang: str) -> str:
         """
-        Generate a human-readable alert message.
+        Translate math operator to human-readable text.
+        
+        Args:
+            operator: MathOperator enum value
+            lang: Language code
+            
+        Returns:
+            Translated operator text
+        """
+        operator_map = {
+            MathOperator.GREATER_THAN: "operator_greater_than",
+            MathOperator.LESS_THAN: "operator_less_than", 
+            MathOperator.GREATER_THAN_OR_EQUAL: "operator_greater_than_or_equal",
+            MathOperator.LESS_THAN_OR_EQUAL: "operator_less_than_or_equal",
+            MathOperator.EQUAL: "operator_equal",
+            MathOperator.NOT_EQUAL: "operator_not_equal"
+        }
+        
+        key = operator_map.get(operator, "operator_greater_than")
+        return translate(key, lang, key)
+
+    def _generate_alert_message(self, alarm: Any, trigger_value: float, request_id: Optional[str] = None) -> str:
+        """
+        Generate a human-readable alert message using translations.
         
         Args:
             alarm: Alarm domain model object
             trigger_value: The value that triggered the alarm
+            request_id: Optional request ID for tracing
             
         Returns:
             Formatted alert message
         """
-        # Handle MathOperator enum directly
-        if alarm.math_operator == MathOperator.GREATER_THAN:
-            operator_text = "exceeded"
-        elif alarm.math_operator == MathOperator.LESS_THAN:
-            operator_text = "fell below"
-        elif alarm.math_operator == MathOperator.GREATER_THAN_OR_EQUAL:
-            operator_text = "reached or exceeded"
-        elif alarm.math_operator == MathOperator.LESS_THAN_OR_EQUAL:
-            operator_text = "reached or fell below"
-        elif alarm.math_operator == MathOperator.EQUAL:
-            operator_text = "equals"
-        elif alarm.math_operator == MathOperator.NOT_EQUAL:
-            operator_text = "does not equal"
-        else:
-            operator_text = "triggered condition for"
+        lang = self._get_language(request_id)
+        operator_text = self._translate_math_operator(alarm.math_operator, lang)
         
-        return (f"Alarm '{alarm.name}': {alarm.field_name} value {trigger_value} "
-                f"{operator_text} threshold {alarm.threshold}")
+        return translate(
+            "alert_triggered",
+            lang,
+            "alert_triggered",
+            alarm_name=alarm.name,
+            field_name=alarm.field_name,
+            trigger_value=trigger_value,
+            operator_text=operator_text,
+            threshold=alarm.threshold
+        )
     
     async def get_alarm_statistics(self, sensor_id: str) -> Dict[str, Any]:
         """
@@ -668,6 +703,7 @@ class AlarmHandler:
     async def _close_active_alert(
         self, 
         alert_id: uuid.UUID, 
+        device_id: str,
         request_id: Optional[str] = None
     ) -> None:
         """
@@ -676,19 +712,15 @@ class AlarmHandler:
         
         Args:
             alert_id: UUID of the alert to close
+            device_id: Device ID parameter
             request_id: Optional request ID for tracing
         """
         try:
-            # First get the current alert to retrieve alarm information
-            alert = await self.alert_repository.get_by_id(alert_id)
+            # Get the alert - it already contains all alarm information
+            alert = await self.alert_repository.find(alert_id)
             if not alert:
                 logger.error(f"[{request_id}] Alert {alert_id} not found for closing")
                 return
-            
-            # Get the associated alarm for notification details
-            alarm = await self.alarm_repository.get_by_id(uuid.UUID(alert.alarm_id))
-            if not alarm:
-                logger.error(f"[{request_id}] Alarm {alert.alarm_id} not found for alert {alert_id}")
             
             # Update the alert's end_date and treated status to mark it as resolved
             closed_at = datetime.utcnow()
@@ -700,35 +732,51 @@ class AlarmHandler:
             await self.alert_repository.update(alert_id, update_data)
             logger.debug(f"[{request_id}] Closed alert {alert_id} by setting end_date and treated=True")
             
-            # Publish resolution notification to Kafka if producer is available and alarm exists
-            if self.kafka_producer and alarm:
+            # Publish resolution notification to Kafka if producer is available
+            if self.kafka_producer:
                 try:
                     # Create resolution alert message for email notification
-                    resolution_message = f"RESOLVED: Alarm '{alarm.name}' condition no longer met"
+                    lang = self._get_language(request_id)
+                    resolution_message = translate(
+                        "alert_resolved",
+                        lang,
+                        "alert_resolved",
+                        alarm_name=alert.alarm_name or "Unknown"
+                    )
+                    
+                    # Create translated alert name for the title
+                    resolved_alert_name = translate(
+                        "alert_resolved",
+                        lang,
+                        "alert_resolved",
+                        alarm_name=alert.alarm_name or "Unknown"
+                    )
                     
                     kafka_alert = AlertMessage(
                         request_id=request_id or str(uuid.uuid4()),
                         timestamp=closed_at,
                         id=str(alert_id),  # Use the same alert ID
-                        name=f"RESOLVED: {alarm.name}",
+                        name=resolved_alert_name,
                         message=resolution_message,
                         treated=True,
                         start_date=alert.start_date,
                         end_date=closed_at,
                         error_value=alert.error_value,
+                        is_resolved=True,  # This is a resolved alert notification
                         # Additional message bus context fields
-                        alarm_id=str(alarm.id),
-                        sensor_id=str(alarm.sensor_id),
-                        device_id=getattr(alert, 'device_id', 'unknown'),
-                        alarm_type=str(alarm.alarm_type),
-                        field_name=alarm.field_name,
-                        threshold=alarm.threshold,
-                        math_operator=str(alarm.math_operator),
-                        level=alarm.level.name,  # Convert enum to string
-                        recipients=getattr(alarm, 'recipients', None),
-                        notify_creator=getattr(alarm, 'notify_creator', True),
-                        alarm_creator_full_name=getattr(alarm, 'creator_full_name', None),
-                        alarm_creator_email=getattr(alarm, 'creator_email', None)
+                        alarm_id=str(alert.alarm_id),
+                        sensor_id=str(alert.sensor_id),
+                        sensor_name=alert.sensor_name,
+                        device_id=device_id,
+                        alarm_type=alert.alarm_type.value if alert.alarm_type else "Unknown",  # Use .value
+                        field_name=alert.alarm_field_name,
+                        threshold=alert.alarm_threshold,
+                        math_operator=alert.alarm_math_operator.value if alert.alarm_math_operator else "Unknown",  # Use .value
+                        level=alert.alarm_level.name if alert.alarm_level else "INFO",
+                        recipients=getattr(alert, 'recipients', None),
+                        notify_creator=getattr(alert, 'notify_creator', True),
+                        alarm_creator_full_name=alert.alarm_creator_full_name,
+                        alarm_creator_email=alert.alarm_creator_email
                     )
                     
                     self.kafka_producer.publish_alert(kafka_alert)
@@ -738,7 +786,7 @@ class AlarmHandler:
                     logger.error(f"[{request_id}] Failed to publish resolution notification for alert {alert_id} to Kafka: {kafka_error}")
                     # Don't fail the entire alert closure if Kafka publishing fails
             else:
-                logger.debug(f"[{request_id}] Kafka producer not available or alarm not found, skipping resolution notification")
+                logger.debug(f"[{request_id}] Kafka producer not available, skipping resolution notification")
             
         except Exception as e:
             logger.error(f"[{request_id}] Failed to close alert {alert_id}: {e}")

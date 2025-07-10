@@ -133,10 +133,12 @@ class AlertMessage(BaseMessage):
     treated: bool = Field(False, description="Whether the alert has been treated")
     start_date: datetime = Field(..., description="Start date of the alert")
     error_value: float = Field(..., description="Value that triggered the alert")
+    is_resolved: bool = Field(False, description="Whether this is a resolved alert notification")
     
     # Additional fields for message bus context (not in API schema)
     alarm_id: Optional[str] = Field(None, description="UUID of the alarm that triggered this alert")
     sensor_id: Optional[str] = Field(None, description="UUID of the sensor that triggered the alarm")
+    sensor_name: Optional[str] = Field(None, description="Name of the sensor that triggered the alarm")
     device_id: Optional[str] = Field(None, description="Device ID parameter of the sensor")
     alarm_type: Optional[str] = Field(None, description="Type of alarm (Status, Measure)")
     field_name: Optional[str] = Field(None, description="Field name that was monitored")

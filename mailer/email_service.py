@@ -10,6 +10,7 @@ from typing import List, Dict, Any, Optional
 from collections import defaultdict, deque
 from jinja2 import Environment, FileSystemLoader, Template
 import asyncio
+from preservarium_sdk.core.utils import translate
 
 import config
 
@@ -44,6 +45,7 @@ class EmailService:
             )
             # Add custom filters
             self.template_env.filters['alert_level_class'] = self._alert_level_to_css_class
+            logger.info(f"Template directory loaded: {config.EMAIL_TEMPLATE_DIR}")
         except Exception as e:
             logger.warning(f"Could not load template directory {config.EMAIL_TEMPLATE_DIR}: {e}")
             self.template_env = None
@@ -51,6 +53,55 @@ class EmailService:
         # Default template fallback
         self.default_template = self._get_default_template()
         
+    def _get_language(self) -> str:
+        """
+        Get the language for translations. Defaults to French as requested.
+        
+        Returns:
+            Language code (default: 'fr')
+        """
+        return "fr"  # French as default language
+        
+    def _format_french_date(self, date_str: str) -> str:
+        """
+        Convert ISO date string to French human readable format.
+        
+        Args:
+            date_str: ISO format date string
+            
+        Returns:
+            French formatted date like "Jeudi 18 décembre à 9h50"
+        """
+        try:
+            from datetime import datetime
+            import locale
+            
+            # Parse the date string (handle both with and without microseconds)
+            if 'T' in date_str:
+                if '.' in date_str:
+                    # Has microseconds
+                    dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                else:
+                    # No microseconds
+                    dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+            else:
+                # Just date
+                dt = datetime.fromisoformat(date_str)
+            
+            # French day and month names
+            days_fr = ["Lundi", "Mardi", "Mercredi", "Jeudi", "Vendredi", "Samedi", "Dimanche"]
+            months_fr = ["janvier", "février", "mars", "avril", "mai", "juin",
+                        "juillet", "août", "septembre", "octobre", "novembre", "décembre"]
+            
+            day_name = days_fr[dt.weekday()]
+            month_name = months_fr[dt.month - 1]
+            
+            return f"{day_name} {dt.day} {month_name} à {dt.hour}h{dt.minute:02d}"
+            
+        except Exception as e:
+            logger.warning(f"Error formatting date {date_str}: {e}")
+            return date_str[:19]  # Fallback to truncated ISO format
+    
     def _alert_level_to_css_class(self, level):
         """
         Convert alert level string to CSS class name.
@@ -96,11 +147,11 @@ class EmailService:
         </head>
         <body>
             <div class="container">
-                <div class="header{% if alert.name.startswith('RESOLVED:') %} resolved{% endif %}">
-                    {% if alert.name.startswith('RESOLVED:') %}
-                        <h1>✅ Alert Resolved</h1>
+                <div class="header{% if is_resolved %} resolved{% endif %}">
+                    {% if is_resolved %}
+                        <h1>{{ alert_resolved_notification }}</h1>
                     {% else %}
-                        <h1>🚨 Alert Notification</h1>
+                        <h1>{{ alert_notification }}</h1>
                     {% endif %}
                 </div>
                 
@@ -110,22 +161,22 @@ class EmailService:
                 </div>
                 
                 <div class="details">
-                    <h3>Alert Details</h3>
+                    <h3>{{ alert_details }}</h3>
                     <table>
-                        <tr><th>Device ID</th><td>{{ alert.device_id }}</td></tr>
-                        <tr><th>Sensor ID</th><td>{{ alert.sensor_id }}</td></tr>
-                        <tr><th>Alert Level</th><td>{{ alert.level }}</td></tr>
-                        <tr><th>Alert Type</th><td>{{ alert.alarm_type }}</td></tr>
-                        <tr><th>Field</th><td>{{ alert.field_name }}</td></tr>
-                        <tr><th>Trigger Value</th><td>{{ alert.error_value }}</td></tr>
-                        <tr><th>Threshold</th><td>{{ alert.threshold }} ({{ alert.math_operator }})</td></tr>
-                        <tr><th>Triggered At</th><td>{{ alert.start_date }}</td></tr>
+                        <tr><th>{{ device_id }}</th><td>{{ alert.device_id }}</td></tr>
+                        <tr><th>{{ sensor_name }}</th><td>{{ alert.sensor_name }}</td></tr>
+                        <tr><th>{{ severity }}</th><td>{{ alert.level }}</td></tr>
+                        <tr><th>{{ alert_type }}</th><td>{{ translated_alarm_type }}</td></tr>
+                        <tr><th>{{ field }}</th><td>{{ alert.field_name }}</td></tr>
+                        <tr><th>{{ trigger_value }}</th><td>{{ alert.error_value }}</td></tr>
+                        <tr><th>{{ condition }}</th><td>{{ formatted_threshold }}</td></tr>
+                        <tr><th>{{ triggered_at }}</th><td>{{ formatted_triggered_at }}</td></tr>
                     </table>
                 </div>
                 
                 <div class="footer">
-                    <p>This is an automated alert from the Preservarium monitoring system.</p>
-                    <p>Alert ID: {{ alert.id }}</p>
+                    <p>{{ email_footer_automated }}</p>
+                    <p>{{ email_footer_no_reply }}</p>
                 </div>
             </div>
         </body>
@@ -191,20 +242,85 @@ class EmailService:
             if self.template_env:
                 try:
                     template = self.template_env.get_template(config.DEFAULT_EMAIL_TEMPLATE)
-                except Exception:
+                    logger.debug(f"Successfully loaded external template: {config.DEFAULT_EMAIL_TEMPLATE}")
+                except Exception as e:
+                    logger.warning(f"Failed to load external template {config.DEFAULT_EMAIL_TEMPLATE}: {e}")
+                    logger.info("Falling back to default template")
                     template = self.default_template
             else:
+                logger.info("Template environment not available, using default template")
                 template = self.default_template
             
-            # Render template
-            html_body = template.render(alert=alert_data)
+            # Render template with alert data and translations
+            lang = self._get_language()
             
-            # Generate subject - check if it's a resolution alert
-            alert_name = alert_data.get('name', 'Unknown')
-            if alert_name.startswith('RESOLVED:'):
-                subject = f"✅ {alert_name} - {alert_data.get('device_id', 'Unknown Device')}"
+            # Translate alarm type directly from Kafka AlertMessage (using enum values)
+            translated_alarm_type = ""
+            alarm_type = alert_data.get('alarm_type', '')
+            if alarm_type == 'Measure':
+                translated_alarm_type = translate("alarm_type_MEASURE", lang, "alarm_type_MEASURE")
+            elif alarm_type == 'Status':
+                translated_alarm_type = translate("alarm_type_STATUS", lang, "alarm_type_STATUS")
             else:
-                subject = f"🚨 Alert: {alert_name} - {alert_data.get('device_id', 'Unknown Device')}"
+                translated_alarm_type = str(alarm_type)
+            
+            # Format threshold with operator symbol (math_operator is now the actual symbol)
+            math_operator = alert_data.get('math_operator', '')
+            threshold = alert_data.get('threshold', '')
+            formatted_threshold = f"{math_operator} {threshold}"
+            
+            # Format date in French
+            formatted_triggered_at = ""
+            start_date = alert_data.get('start_date') or alert_data.get('triggered_at')
+            if start_date:
+                formatted_triggered_at = self._format_french_date(str(start_date))
+            
+            # Use the is_resolved flag from the alert data (set by alarm handler)
+            is_resolved = alert_data.get('is_resolved', False)
+            
+            template_context = {
+                'alert': alert_data,
+                'is_resolved': is_resolved,
+                'alert_notification': translate("alert_notification", lang, "alert_notification"),
+                'alert_resolved_notification': translate("alert_resolved_notification", lang, "alert_resolved_notification"),
+                'email_footer_automated': translate("email_footer_automated", lang, "email_footer_automated"),
+                'email_footer_no_reply': translate("email_footer_no_reply", lang, "email_footer_no_reply"),
+                'alert_details': translate("alert_details", lang, "alert_details"),
+                'alert_id': translate("alert_id", lang, "alert_id"),
+                'device_id': translate("device_id", lang, "device_id"),
+                'sensor_name': translate("sensor_name", lang, "sensor_name"),
+                'alert_type': translate("alert_type", lang, "alert_type"),
+                'field': translate("field", lang, "field"),
+                'trigger_value': translate("trigger_value", lang, "trigger_value"),
+                'condition': translate("condition", lang, "condition"),
+                'triggered_at': translate("triggered_at", lang, "triggered_at"),
+                'severity': translate("severity", lang, "severity"),
+                'device': translate("device", lang, "device"),
+                'translated_alarm_type': translated_alarm_type,
+                'formatted_threshold': formatted_threshold,
+                'formatted_triggered_at': formatted_triggered_at
+            }
+            html_body = template.render(**template_context)
+            
+            # Generate subject - use the is_resolved flag
+            alert_name = alert_data.get('name', 'Unknown')
+            
+            if is_resolved:
+                subject = translate(
+                    "alert_subject_resolved",
+                    lang,
+                    "alert_subject_resolved",
+                    alert_name=alert_name,
+                    device_id=alert_data.get('device_id', 'Unknown Device')
+                )
+            else:
+                subject = translate(
+                    "alert_subject",
+                    lang,
+                    "alert_subject",
+                    alert_name=alert_name,
+                    device_id=alert_data.get('device_id', 'Unknown Device')
+                )
             
             return subject, html_body
             

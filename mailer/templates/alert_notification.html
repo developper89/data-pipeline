@@ -86,13 +86,11 @@
     </style>
   </head>
   <body>
-    <div
-      class="header{% if alert.name.startswith('RESOLVED:') %} resolved{% endif %}"
-    >
-      {% if alert.name.startswith('RESOLVED:') %}
-      <h1>✅ Alert Resolved</h1>
+    <div class="header{% if is_resolved %} resolved{% endif %}">
+      {% if is_resolved %}
+      <h1>{{ alert_resolved_notification }}</h1>
       {% else %}
-      <h1>🚨 Alert Notification</h1>
+      <h1>{{ alert_notification }}</h1>
       {% endif %}
       <p>{{ alert.name }}</p>
     </div>
@@ -100,52 +98,48 @@
     <div class="content">
       <div class="alert-box alert-{{ alert.level|alert_level_class }}">
         <h2>{{ alert.message }}</h2>
-        <p><strong>Device:</strong> {{ alert.device_id }}</p>
-        <p><strong>Severity:</strong> {{ alert.level }}</p>
+        <p><strong>{{ device }}:</strong> {{ alert.device_id }}</p>
+        <p><strong>{{ severity }}:</strong> {{ alert.level }}</p>
       </div>
 
       <div class="details">
-        <h3>Alert Details</h3>
+        <h3>{{ alert_details }}</h3>
         <table>
           <tr>
-            <th>Alert ID</th>
-            <td>{{ alert.alert_id }}</td>
-          </tr>
-          <tr>
-            <th>Device ID</th>
+            <th>{{ device_id }}</th>
             <td>{{ alert.device_id }}</td>
           </tr>
           <tr>
-            <th>Sensor ID</th>
-            <td>{{ alert.sensor_id }}</td>
+            <th>{{ sensor_name }}</th>
+            <td>{{ alert.sensor_name }}</td>
           </tr>
           <tr>
-            <th>Alert Type</th>
-            <td>{{ alert.alarm_type }}</td>
+            <th>{{ alert_type }}</th>
+            <td>{{ translated_alarm_type }}</td>
           </tr>
           <tr>
-            <th>Field</th>
+            <th>{{ field }}</th>
             <td>{{ alert.field_name }}</td>
           </tr>
           <tr>
-            <th>Trigger Value</th>
-            <td>{{ alert.trigger_value }}</td>
+            <th>{{ trigger_value }}</th>
+            <td>{{ alert.error_value }}</td>
           </tr>
           <tr>
-            <th>Threshold</th>
-            <td>{{ alert.threshold }} ({{ alert.math_operator }})</td>
+            <th>{{ condition }}</th>
+            <td>{{ formatted_threshold }}</td>
           </tr>
           <tr>
-            <th>Triggered At</th>
-            <td>{{ alert.triggered_at }}</td>
+            <th>{{ triggered_at }}</th>
+            <td>{{ formatted_triggered_at }}</td>
           </tr>
         </table>
       </div>
     </div>
 
     <div class="footer">
-      <p>This is an automated alert from the Preservarium monitoring system.</p>
-      <p>Please do not reply to this email.</p>
+      <p>{{ email_footer_automated }}</p>
+      <p>{{ email_footer_no_reply }}</p>
     </div>
   </body>
 </html>

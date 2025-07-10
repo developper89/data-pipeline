@@ -48,14 +48,30 @@ class Validator:
         """
         errors = []
         
+        # Clone datatype to avoid modifying the original object
+        import copy
+        datatype = copy.deepcopy(datatype)
+        
         datatype_name = str(datatype.category) if len(list(dict.fromkeys(datatype.display_names))) > 1 else datatype.display_names[0]
         datatype.name = datatype_name
-        # Check for auto-discovery and update datatype if enabled
-        if datatype and datatype.auto_discovery:
-            datatype = await self._perform_auto_discovery(datatype, standardized_data, device_id)
         
         # Values to be processed
         values = standardized_data.values
+
+        if standardized_data.display_names:
+            # Use suggested display names with processing
+            processed_display_names = self._process_display_name_replacement(
+                standardized_data.display_names, [datatype.name] * len(values)
+            )
+            datatype.display_names = processed_display_names
+            logger.info(f"Updated display names for datatype {datatype.id}: {processed_display_names}")
+        # else:
+        #     datatype.display_names = [datatype.name] * len(values)
+        #     logger.info(f"Used existing display name for datatype {datatype.id}: {datatype.name}")
+            
+        # Check for auto-discovery and update datatype if enabled
+        if datatype and datatype.auto_discovery:
+            datatype = await self._perform_auto_discovery(datatype, standardized_data, device_id)
         
         # 3. Apply any parsing operations first
         # parsing_applied = False
@@ -84,11 +100,12 @@ class Validator:
         if hasattr(datatype, 'data_type') and datatype.data_type:
             expected_types = datatype.data_type
 
-        type_valid, converted_values, type_errors = self._validate_type(
+        type_valid, converted_values, type_validation_results, type_errors = self._validate_type(
             values, 
-            expected_types
+            expected_types,
+            standardized_data
         )
-        logger.debug(f"type_valid: {type_valid}, converted_values: {converted_values}, type_errors: {type_errors}")
+
         # Add any type validation errors
         for error_msg in type_errors:
             errors.append(ErrorMessage(
@@ -100,9 +117,10 @@ class Validator:
         # 5. Validate range for all values
         range_valid, range_results, range_errors = self._validate_range(
             converted_values,
-            datatype
+            datatype,
+            standardized_data
         )
-        logger.debug(f"range_valid: {range_valid}, range_results: {range_results}, range_errors: {range_errors}")
+
         # Add any range validation errors
         for error_msg in range_errors:
             errors.append(ErrorMessage(
@@ -111,18 +129,68 @@ class Validator:
                 request_id=request_id
             ))
         
-        # 6. Build validated output if all validations pass
-        if (type_valid and range_valid):
-            # Apply any needed transformations
-            validated_output = self._build_validated_output(
-                device_id, 
-                datatype,
-                converted_values,
-                request_id,
-                standardized_data,
-            )
-            return validated_output, errors
+        # 6. Build validated output with partial validation support
+        # Filter out invalid values but keep valid ones
+        if converted_values and range_results:
+            # Combine type and range validation results to determine which values are valid
+            valid_indices = []
+            for i in range(len(converted_values)):
+                # A value is valid if it passes both type conversion and range validation
+                type_valid_for_index = (i < len(type_validation_results) and type_validation_results[i])
+                range_valid_for_index = (i < len(range_results) and range_results[i])
+                
+                if type_valid_for_index and range_valid_for_index:
+                    valid_indices.append(i)
+            
+            if valid_indices:
+                # Filter values, labels, display_names, and other arrays to only include valid indices
+                filtered_values = [converted_values[i] for i in valid_indices]
+                filtered_labels = [standardized_data.labels[i] for i in valid_indices] if standardized_data.labels else []
+                filtered_display_names = [standardized_data.display_names[i] for i in valid_indices] if standardized_data.display_names else []
+                
+                # Filter datatype arrays to match the valid indices
+                filtered_datatype_labels = [datatype.labels[i] for i in valid_indices] if datatype.labels else []
+                filtered_datatype_display_names = [datatype.display_names[i] for i in valid_indices] if datatype.display_names else []
+                filtered_datatype_units = [datatype.unit[i] for i in valid_indices] if datatype.unit else []
+                filtered_datatype_persist = [datatype.persist[i] for i in valid_indices] if datatype.persist else []
+                
+                # Create a filtered standardized_data object for building the validated output
+                filtered_standardized_data = StandardizedOutput(
+                    device_id=standardized_data.device_id,
+                    values=filtered_values,
+                    labels=filtered_labels,
+                    display_names=filtered_display_names,
+                    index=standardized_data.index,
+                    metadata=standardized_data.metadata,
+                    request_id=standardized_data.request_id,
+                    timestamp=standardized_data.timestamp
+                )
+                
+                # Create a filtered datatype object for building the validated output
+                # Copy the original datatype object and update its arrays
+                import copy
+                filtered_datatype = copy.deepcopy(datatype)
+                
+                # Set filtered arrays
+                filtered_datatype.labels = filtered_datatype_labels
+                filtered_datatype.display_names = filtered_datatype_display_names
+                filtered_datatype.unit = filtered_datatype_units
+                filtered_datatype.persist = filtered_datatype_persist
+                
+                # Build validated output with filtered data
+                validated_output = self._build_validated_output(
+                    device_id, 
+                    filtered_datatype,
+                    filtered_values,
+                    request_id,
+                    filtered_standardized_data,
+                )
+                
+                logger.info(f"[{request_id}] Partial validation: {len(valid_indices)} out of {len(converted_values)} values passed validation for device {device_id}")
+                return validated_output, errors
         
+        # If no valid values found, return None
+        logger.warning(f"[{request_id}] No valid values found after validation for device {device_id}")
         return None, errors
     
     async def _perform_auto_discovery(
@@ -242,18 +310,7 @@ class Validator:
             # 5. Handle display names - use existing first value if available, otherwise use suggested value
             # Check if datatype already has display_names values
             
-            if standardized_data.display_names:
-                # Use suggested display names with processing
-                processed_display_names = self._process_display_name_replacement(
-                    standardized_data.display_names, [datatype.name] * num_values
-                )
-                update_data['display_names'] = processed_display_names
-                updated = True
-                logger.debug(f"Auto-discovery: Updated display names for datatype {datatype.id}: {processed_display_names}")
-            else:
-                update_data['display_names'] = [datatype.name] * num_values
-                updated = True
-                logger.debug(f"Auto-discovery: Used existing display name for datatype {datatype.id}: {datatype.name}")
+            
             
             # 6. Handle labels - use existing first value if available, otherwise use suggested value
             # Check if datatype already has labels values
@@ -305,7 +362,7 @@ class Validator:
             logger.error(f"Auto-discovery error for datatype {datatype.id} from device {device_id}: {e}")
             return datatype  # Return original datatype even if auto-discovery fails
 
-    def _validate_range(self, values: List[Any], datatype: Any) -> Tuple[bool, List[bool], List[str]]:
+    def _validate_range(self, values: List[Any], datatype: Any, standardized_data: StandardizedOutput) -> Tuple[bool, List[bool], List[str]]:
         """
         Check if values are within the range defined in datatype.
         Uses per-index validation: each value is checked against min/max at the same index.
@@ -316,6 +373,7 @@ class Validator:
         Args:
             values: The list of values to validate
             datatype: The datatype object containing min and max constraints
+            standardized_data: StandardizedOutput object containing labels
             
         Returns:
             Tuple of (all_valid, validation_results, error_messages)
@@ -327,6 +385,9 @@ class Validator:
         min_values = getattr(datatype, 'min', [])
         max_values = getattr(datatype, 'max', [])
         
+        # Get labels from standardized_data for better error messages
+        labels = standardized_data.labels if standardized_data.labels else []
+        
         # If no range constraints are defined, consider all values valid
         if not min_values and not max_values:
             return True, [True] * len(values), []
@@ -337,9 +398,15 @@ class Validator:
         error_messages = []
         
         for i, value in enumerate(values):
+            # Get label for this index (labels array is same length as values)
+            label = labels[i] if labels and i < len(labels) else ""
+            
+            # Format label info for error messages
+            label_info = f" (label: {label})" if label else ""
+            
             if value is None:
                 validation_results.append(False)
-                error_messages.append(f"Value at index {i} is None")
+                error_messages.append(f"Value at index {i}{label_info} is None")
                 all_valid = False
                 continue
             
@@ -361,7 +428,7 @@ class Validator:
             
             # Skip validation if no constraints for this value (both are None)
             if min_val is None and max_val is None:
-                logger.debug(f"No min/max constraints for value at index {i}, skipping range validation")
+                logger.debug(f"No min/max constraints for value at index {i}{label_info}, skipping range validation")
                 validation_results.append(True)
                 continue
             
@@ -375,9 +442,9 @@ class Validator:
                         min_float = float(min_val)
                         if value_float < min_float:
                             valid = False
-                            error_messages.append(f"Value {value} at index {i} is below minimum {min_val}")
+                            error_messages.append(f"Value {value} at index {i}{label_info} is below minimum {min_val}")
                     except (ValueError, TypeError) as e:
-                        logger.warning(f"Invalid min constraint '{min_val}' at index {i}: {e}")
+                        logger.warning(f"Invalid min constraint '{min_val}' at index {i}{label_info}: {e}")
                         # Continue validation with max constraint if available
                 
                 # Check max constraint if available (not None)
@@ -386,14 +453,21 @@ class Validator:
                         max_float = float(max_val)
                         if value_float > max_float:
                             valid = False
-                            error_messages.append(f"Value {value} at index {i} is above maximum {max_val}")
+                            error_messages.append(f"Value {value} at index {i}{label_info} is above maximum {max_val}")
                     except (ValueError, TypeError) as e:
-                        logger.warning(f"Invalid max constraint '{max_val}' at index {i}: {e}")
+                        logger.warning(f"Invalid max constraint '{max_val}' at index {i}{label_info}: {e}")
                         # Continue validation - this constraint is ignored
                 
                 validation_results.append(valid)
                 if not valid:
                     all_valid = False
+                    # Log failed validation as warning
+                    constraints = []
+                    if min_val is not None:
+                        constraints.append(f"min={min_val}")
+                    if max_val is not None:
+                        constraints.append(f"max={max_val}")
+                    logger.warning(f"Value {value} at index {i}{label_info} failed range validation ({', '.join(constraints)})")
                 else:
                     # Log successful validation for debugging
                     constraints = []
@@ -401,16 +475,16 @@ class Validator:
                         constraints.append(f"min={min_val}")
                     if max_val is not None:
                         constraints.append(f"max={max_val}")
-                    logger.debug(f"Value {value} at index {i} passed range validation ({', '.join(constraints)})")
+                    logger.debug(f"Value {value} at index {i}{label_info} passed range validation ({', '.join(constraints)})")
                     
             except (ValueError, TypeError) as e:
                 validation_results.append(False)
-                error_messages.append(f"Range validation failed due to type conversion error: {value} at index {i} - {str(e)}")
+                error_messages.append(f"Range validation failed due to type conversion error: {value} at index {i}{label_info} - {str(e)}")
                 all_valid = False
         
         return all_valid, validation_results, error_messages
         
-    def _validate_type(self, values: List[Any], expected_types: List[DatatypeType]) -> Tuple[bool, List[Any], List[str]]:
+    def _validate_type(self, values: List[Any], expected_types: List[DatatypeType], standardized_data: StandardizedOutput) -> Tuple[bool, List[Any], List[bool], List[str]]:
         """
         Validate and convert a list of values to the expected type if possible.
         Uses per-index validation: each value is validated against the type at the same index.
@@ -418,25 +492,38 @@ class Validator:
         Args:
             values: The list of values to validate and convert
             expected_types: List of expected data types (DatatypeType enums)
+            standardized_data: StandardizedOutput object containing labels
             
         Returns:
-            Tuple of (all_valid, converted_values, error_messages)
+            Tuple of (all_valid, converted_values, type_validation_results, error_messages)
         """
         if not values:
-            return False, [], ["No values provided for validation"]
+            return False, [], [], ["No values provided for validation"]
         
         if not expected_types:
             # If no expected types are specified, consider any values valid
-            return True, values, []
+            return True, values, [True] * len(values), []
+        
+        # Get labels from standardized_data for better error messages
+        labels = standardized_data.labels if standardized_data.labels else []
         
         converted_values = []
+        type_validation_results = []
         error_messages = []
         all_valid = True
         
         for i, value in enumerate(values):
+            # Get label for this index (labels array is same length as values)
+            label = labels[i] if labels and i < len(labels) else ""
+            
+            # Format label info for error messages
+            label_info = f" (label: {label})" if label else ""
+            
             if value is None:
                 converted_values.append(None)
-                error_messages.append(f"Value at index {i} is None")
+                type_validation_results.append(False)
+                error_messages.append(f"Value at index {i}{label_info} is None")
+                logger.warning(f"Value at index {i}{label_info} failed type validation (value is None)")
                 all_valid = False
                 continue
             
@@ -448,8 +535,11 @@ class Validator:
             else:
                 # No type constraint, keep original value
                 converted_values.append(value)
+                type_validation_results.append(True)
+                logger.debug(f"Value {value} at index {i}{label_info} passed type validation (no constraint)")
                 continue
             
+            type_valid_for_this_value = True
             try:
                 if expected_type == DatatypeType.NUMBER:
                     converted_values.append(float(value))
@@ -491,15 +581,24 @@ class Validator:
                         converted_values.append(str(value).encode('utf-8'))
                 else:
                     # Default case - no conversion
-                    logger.info(f"Using default validation for unrecognized type: {expected_type} at index {i}")
+                    logger.info(f"Using default validation for unrecognized type: {expected_type} at index {i}{label_info}")
                     converted_values.append(value)
             except (ValueError, TypeError) as e:
-                logger.warning(f"Type validation failed: {value} is not a valid {expected_type} at index {i}. Error: {e}")
+                logger.warning(f"Type conversion failed for value {value} at index {i}{label_info}: expected {expected_type}. Error: {e}")
                 converted_values.append(value)  # Keep original value
                 error_messages.append(f"Type validation failed for value '{value}' at index {i}: expected {expected_type}. Error: {e}")
+                type_valid_for_this_value = False
                 all_valid = False
+            
+            # Log validation result
+            if type_valid_for_this_value:
+                logger.debug(f"Value {value} at index {i}{label_info} passed type validation (expected: {expected_type})")
+            else:
+                logger.warning(f"Value {value} at index {i}{label_info} failed type validation (expected: {expected_type})")
+            
+            type_validation_results.append(type_valid_for_this_value)
         
-        return all_valid, converted_values, error_messages
+        return all_valid, converted_values, type_validation_results, error_messages
                 
     def _build_validated_output(
         self, 

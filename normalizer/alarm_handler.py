@@ -91,7 +91,7 @@ class AlarmHandler:
             logger.debug(f"[{request_id}] Found {len(active_alarms)} active alarms for sensor {validated_data.device_id} and datatype {data_datatype_id}")
             
             # Check for unpublished alarms and publish them to Kafka
-            await self._publish_unpublished_alarms(active_alarms, validated_data.device_id, request_id)
+            # await self._publish_unpublished_alarms(active_alarms, validated_data.device_id, request_id)
             
             # Process each alarm
             for alarm in active_alarms:
@@ -791,77 +791,6 @@ class AlarmHandler:
         except Exception as e:
             logger.error(f"[{request_id}] Failed to close alert {alert_id}: {e}")
             raise
-    
-    async def republish_all_unpublished_alarms(self, request_id: Optional[str] = None) -> Dict[str, Any]:
-        """
-        Utility method to republish all unpublished alarms across all sensors.
-        Useful for recovery scenarios or initial synchronization.
-        
-        Args:
-            request_id: Optional request ID for tracing
-            
-        Returns:
-            Dictionary with republishing statistics
-        """
-        if not self.kafka_producer:
-            logger.warning(f"[{request_id}] Kafka producer not available, cannot republish alarms")
-            return {"error": "Kafka producer not available"}
-        
-        try:
-            # Find all unpublished alarms
-            all_alarms = await self.alarm_repository.find_by(active=True)
-            unpublished_alarms = [
-                alarm for alarm in all_alarms 
-                if not hasattr(alarm, 'mq_published_at') or alarm.mq_published_at is None
-            ]
-            
-            if not unpublished_alarms:
-                logger.info(f"[{request_id}] No unpublished alarms found")
-                return {
-                    "total_alarms": len(all_alarms),
-                    "unpublished_alarms": 0,
-                    "published_count": 0,
-                    "failed_count": 0
-                }
-            
-            published_count = 0
-            failed_count = 0
-            
-            logger.info(f"[{request_id}] Found {len(unpublished_alarms)} unpublished alarms to republish")
-            
-            for alarm in unpublished_alarms:
-                try:
-                    # Get sensor to find device_id
-                    sensor = await self._get_sensor_for_alarm(alarm)
-                    device_id = sensor.parameter if sensor else "unknown"
-                    
-                    # Publish alarm configuration
-                    await self._publish_alarm_configuration(alarm, device_id, request_id)
-                    
-                    # Mark as published
-                    await self._mark_alarm_as_published(alarm.id, request_id)
-                    
-                    published_count += 1
-                    logger.debug(f"[{request_id}] Republished alarm '{alarm.name}' ({alarm.id})")
-                    
-                except Exception as e:
-                    failed_count += 1
-                    logger.error(f"[{request_id}] Failed to republish alarm {alarm.id}: {e}")
-                    continue
-            
-            result = {
-                "total_alarms": len(all_alarms),
-                "unpublished_alarms": len(unpublished_alarms),
-                "published_count": published_count,
-                "failed_count": failed_count
-            }
-            
-            logger.info(f"[{request_id}] Republishing complete: {published_count} published, {failed_count} failed")
-            return result
-            
-        except Exception as e:
-            logger.error(f"[{request_id}] Error during alarm republishing: {e}")
-            return {"error": str(e)}
     
     async def _get_sensor_for_alarm(self, alarm: Any) -> Any:
         """

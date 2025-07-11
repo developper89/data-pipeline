@@ -193,22 +193,33 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                     # In a real implementation, you would send this to Kafka:
                     self.kafka_producer.publish_raw_message(raw_message)
                     
-                    # formatted_command = await self.command_consumer.get_formatted_command(translation_result.device_id)
-            
-                    # if formatted_command:
-                    #     # Get the command details for logging
-                    #     pending_commands = self.command_consumer.get_pending_commands(translation_result.device_id)
-                    #     command_id = pending_commands[0].get("request_id", "unknown") if pending_commands else "unknown"
+                    # Check for pending commands after publishing the raw message
+                    if self.command_consumer:
+                        try:
+                            formatted_command = await self.command_consumer.get_formatted_command(translation_result.device_id)
+                    
+                            if formatted_command:
+                                # Get the command details for logging
+                                pending_commands = self.command_consumer.get_pending_commands(translation_result.device_id)
+                                command_id = pending_commands[0].get("request_id", "unknown") if pending_commands else "unknown"
+                                
+                                logger.info(f"[{request_id}] 📤 Sending formatted command {command_id} to device {translation_result.device_id} ({len(formatted_command)} bytes)")
+                                
+                                # Acknowledge the command was sent (removes from pending)
+                                if pending_commands:
+                                    success = self.command_consumer.acknowledge_command(translation_result.device_id, command_id)
+                                    if success:
+                                        logger.info(f"[{request_id}] ✅ Command {command_id} acknowledged and removed from pending queue")
+                                    else:
+                                        logger.warning(f"[{request_id}] ⚠️ Failed to acknowledge command {command_id}")
+                                
+                                # Send the formatted binary command in response
+                                success_code = aiocoap.Code.CHANGED if method == "PUT" else aiocoap.Code.CREATED
+                                return aiocoap.Message(code=success_code, payload=formatted_command)
                         
-                    #     logger.info(f"[{request_id}] Sending formatted command {command_id} to device {translation_result.device_id}")
-                        
-                    #     # Acknowledge the command was sent (removes from pending)
-                    #     if pending_commands:
-                    #         self.command_consumer.acknowledge_command(translation_result.device_id, command_id)
-                        
-                    #     # Send the formatted binary command in response
-                    #     success_code = aiocoap.Code.CHANGED if method == "PUT" else aiocoap.Code.CREATED
-                    #     return aiocoap.Message(code=success_code, payload=formatted_command)
+                        except Exception as e:
+                            logger.error(f"[{request_id}] ❌ Error handling pending commands: {e}")
+                            # Continue with normal processing if command handling fails
             
                     return aiocoap.Message(code=aiocoap.Code.CONTENT, payload=b"Raw message published")
                     

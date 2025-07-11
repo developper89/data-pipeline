@@ -1,0 +1,2 @@
+docker build -f connectors/coap_connector/Dockerfile -t coap-connector:latest .
+docker rm -f coap-connector

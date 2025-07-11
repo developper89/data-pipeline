@@ -139,14 +139,14 @@ class NormalizerKafkaProducer:
         if not isinstance(message, AlarmMessage):
             raise TypeError("Message must be an instance of AlarmMessage")
 
-        if not config.KAFKA_ALARMS_TOPIC:
-            logger.warning(f"[{message.request_id}] KAFKA_ALARMS_TOPIC not configured. Skipping alarm publication.")
+        if not config.KAFKA_DEVICE_COMMANDS_TOPIC:
+            logger.warning(f"[{message.request_id}] KAFKA_DEVICE_COMMANDS_TOPIC not configured. Skipping alarm publication.")
             return # Don't raise an error, just skip if not configured
 
         try:
             # Use alarm id as the key for partitioning alarms
             key = message.id
-            topic = config.KAFKA_ALARMS_TOPIC
+            topic = config.KAFKA_DEVICE_COMMANDS_TOPIC
             value = message.model_dump()
 
             logger.debug(f"[{message.request_id}] Publishing AlarmMessage to topic '{topic}' with key '{key}'")

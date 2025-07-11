@@ -54,7 +54,7 @@ class CommandMessage(CustomBaseModel):
     protocol: str = Field(..., description="Protocol to use (mqtt or coap)")
     metadata: Optional[Dict[str, Any]] = Field(
         None,
-        description="Protocol-specific metadata (e.g., MQTT topic/qos/retain, CoAP confirmable/options)"
+        description="Protocol-specific metadata (e.g., MQTT topic/qos/retain, CoAP confirmable/options) and formatting info (parser_script_path, manufacturer)"
     )
     priority: Optional[int] = Field(None, description="Command priority level")
     expires_at: Optional[datetime] = Field(None, description="Command expiration time")

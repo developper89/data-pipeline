@@ -326,6 +326,75 @@ class ProtobufMessageParser:
             logger.warning(f"Error getting protobuf field type for {field_desc.name}: {e}")
             return 'unknown'
 
+    def parse_dict_to_message(self, data: Dict[str, Any], message_type: str) -> bytes:
+        """
+        Convert dictionary data to protobuf message bytes.
+        Generic function that works with any protobuf message type.
+
+        Args:
+            data: Dictionary containing fields to encode
+            message_type: Type of protobuf message to create
+
+        Returns:
+            bytes: Serialized protobuf message
+
+        Raises:
+            ValueError: If message_type is not available
+            RuntimeError: If encoding fails
+        """
+        logger.debug(f"Converting dictionary to {message_type} protobuf message")
+        
+        if message_type not in self.proto_modules:
+            available_types = list(self.proto_modules.keys())
+            raise ValueError(f"Message type '{message_type}' not available for {self.manufacturer}. Available types: {available_types}")
+
+        proto_info = self.proto_modules[message_type]
+        proto_class = proto_info['class']
+
+        # Create instance of the protobuf class
+        proto_message = proto_class()
+
+        # Generic field assignment - no manufacturer-specific logic
+        for field_name, value in data.items():
+            if hasattr(proto_message, field_name):
+                try:
+                    # Handle special cases for different field types
+                    if isinstance(value, str) and field_name in ['serial_number', 'encryption_key'] and hasattr(proto_message, field_name):
+                        # Convert hex string to bytes for binary fields
+                        try:
+                            setattr(proto_message, field_name, bytes.fromhex(value))
+                        except ValueError:
+                            # If not valid hex, set as string
+                            setattr(proto_message, field_name, value.encode('utf-8'))
+                    elif isinstance(value, list):
+                        # Handle repeated fields
+                        field_attr = getattr(proto_message, field_name)
+                        if hasattr(field_attr, 'extend'):
+                            field_attr.extend(value)
+                        elif hasattr(field_attr, 'append'):
+                            for item in value:
+                                field_attr.append(item)
+                        else:
+                            setattr(proto_message, field_name, value)
+                    else:
+                        setattr(proto_message, field_name, value)
+                    
+                    logger.debug(f"Set field {field_name} = {value}")
+                except Exception as e:
+                    logger.warning(f"Failed to set field {field_name} = {value}: {e}")
+                    continue
+            else:
+                logger.debug(f"Field {field_name} not found in {message_type} message")
+
+        # Serialize to bytes
+        try:
+            serialized_data = proto_message.SerializeToString()
+            logger.debug(f"Successfully serialized {message_type} message to {len(serialized_data)} bytes")
+            return serialized_data
+        except Exception as e:
+            logger.error(f"Failed to serialize {message_type} message: {e}")
+            raise RuntimeError(f"Protobuf serialization failed for {message_type}: {e}") from e
+
     def cleanup(self):
         """Clean up compiler resources."""
         if self.compiler:

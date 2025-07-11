@@ -23,6 +23,23 @@ connectors:
             validation:
               regex: "^[a-fA-F0-9]{8,64}$"
               normalize: true
+          command_formatting:
+            sources:
+              - command_type: "alarm"
+                message_type: "config"
+                priority: 1
+              - command_type: "config"
+                message_type: "config"
+                priority: 1
+              - command_type: "firmware_update"
+                message_type: "config"
+                priority: 1
+              - command_type: "device_info_request"
+                message_type: "device_info"
+                priority: 1
+            validation:
+              supported_commands:
+                ["alarm", "config", "firmware_update", "device_info_request"]
           message_types:
             measurements:
               proto_class: "ProtoMeasurements"
@@ -78,6 +95,22 @@ connectors:
               #   validation:
               #     min_length: 3
               #     max_length: 50
+          command_formatting:
+            sources:
+              - command_type: "alarm"
+                format_type: "json"
+                topic_pattern: "broker_data/{building_id}/{device_id}/commands"
+                priority: 1
+              - command_type: "config"
+                format_type: "json"
+                topic_pattern: "broker_data/{building_id}/{device_id}/config"
+                priority: 1
+              - command_type: "reboot"
+                format_type: "simple"
+                topic_pattern: "broker_data/{building_id}/{device_id}/control"
+                priority: 1
+            validation:
+              supported_commands: ["alarm", "config", "reboot"]
     env:
       BROKER_HOST: "preservarium.fr"
       BROKER_PORT: "8883"

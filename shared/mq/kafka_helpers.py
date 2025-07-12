@@ -202,6 +202,8 @@ def create_kafka_producer(bootstrap_servers, base_delay=1, **config_overrides):
 
 def create_kafka_consumer(topic, group_id, bootstrap_servers, auto_offset_reset='earliest', base_delay=1, **config_overrides):
     """Creates a KafkaConsumer instance with enhanced error handling and optimized configuration."""
+    logger.info(f"Creating Kafka consumer for topic '{topic}', group '{group_id}', servers: {bootstrap_servers}")
+    
     # Validate servers first
     validated_servers = validate_bootstrap_servers(bootstrap_servers)
     if not validated_servers:
@@ -218,6 +220,7 @@ def create_kafka_consumer(topic, group_id, bootstrap_servers, auto_offset_reset=
             config['bootstrap_servers'] = validated_servers.split(',')
             config['value_deserializer'] = lambda v: json.loads(v.decode('utf-8'))
             
+            logger.debug(f"Creating KafkaConsumer with config: {config}")
             consumer = KafkaConsumer(topic, **config)
             logger.info(f"KafkaConsumer connected to {validated_servers} for topic '{topic}', group '{group_id}'")
             return consumer
@@ -254,15 +257,20 @@ def safe_kafka_poll(consumer: KafkaConsumer, timeout_ms: int = 1000) -> Dict[Any
         
     Returns:
         Message batch dictionary, empty dict on error
+        
+    Raises:
+        KafkaError: When connection/polling fails (to trigger reconnection)
     """
     try:
         return consumer.poll(timeout_ms=timeout_ms)
     except (KafkaError, KafkaTimeoutError) as e:
         logger.error(f"Kafka poll error: {e}")
-        return {}
+        # Re-raise to trigger reconnection logic
+        raise
     except Exception as e:
         logger.error(f"Unexpected error during Kafka poll: {e}")
-        return {}
+        # Re-raise as KafkaError to trigger reconnection
+        raise KafkaError(f"Unexpected poll error: {e}")
 
 def safe_kafka_commit(consumer: KafkaConsumer, offsets: Optional[Dict] = None) -> bool:
     """
@@ -311,29 +319,52 @@ def is_consumer_healthy(consumer: KafkaConsumer) -> bool:
         True if consumer is healthy, False otherwise
     """
     try:
-        # metrics = consumer.metrics()
-        # logger.info(f"Consumer metrics: {metrics}")
-        
         # Primary check: Try to get cluster metadata - this will fail if connection is bad
         # Use a simple topic lookup to test connectivity
         topics = consumer.topics()
         if topics is None:
-            logger.info("Consumer health check failed: unable to retrieve topic metadata")
+            logger.warning("Consumer health check failed: unable to retrieve topic metadata")
             return False
         
         # Secondary check: Verify we can see some topics (empty is suspicious)
         if isinstance(topics, set) and len(topics) == 0:
-            logger.info("Consumer health check failed: no topics visible (possible connectivity issue)")
+            logger.warning("Consumer health check failed: no topics visible (possible connectivity issue)")
+            return False
+        
+        # Additional check: Verify group membership if consumer is assigned to partitions
+        try:
+            assignment = consumer.assignment()
+            if assignment:
+                # If we have partitions assigned, check if we can get high water marks
+                # This will fail if consumer group membership is invalid
+                for tp in list(assignment)[:1]:  # Just check one partition to avoid overhead
+                    try:
+                        consumer.highwater(tp)
+                    except Exception as hw_error:
+                        logger.warning(f"Consumer health check failed: highwater check failed for {tp}: {hw_error}")
+                        return False
+            
+                    
+        except Exception as assignment_error:
+            logger.warning(f"Consumer health check failed during assignment check: {assignment_error}")
+            return False
+            
+        # Additional check: Verify we can get committed offsets
+        try:
+            if consumer.assignment():
+                consumer.committed(next(iter(consumer.assignment())))
+        except Exception as commit_error:
+            logger.warning(f"Consumer health check failed: committed offset check failed: {commit_error}")
             return False
             
         # If we can retrieve topics, the consumer is healthy
         # Note: bootstrap_connected() can be false even when consumer is working fine
         # after initial connection, so we don't check it anymore
-        logger.debug(f"Consumer health check passed: {topics} topics visible")
+        logger.debug(f"Consumer health check passed: {len(topics)} topics visible, {len(consumer.assignment())} partitions assigned")
         return True
         
     except Exception as e:
-        logger.warning(f"Consumer health check failed: {e}")
+        logger.warning(f"Consumer health check failed with exception: {e}")
         return False
 
 def recreate_consumer_on_error(consumer: KafkaConsumer, topic: str, group_id: str, 
@@ -370,7 +401,7 @@ class AsyncResilientKafkaConsumer:
     """An async-compatible resilient Kafka consumer wrapper that handles reconnections and errors gracefully."""
     
     def __init__(self, topic, group_id, bootstrap_servers, auto_offset_reset='earliest', 
-                 max_retries=None, base_delay=1, on_error_callback=None, **config_overrides):
+                 max_retries=None, base_delay=1, on_error_callback=None, seek_to_end=False, **config_overrides):
         self.topic = topic
         self.group_id = group_id
         self.bootstrap_servers = bootstrap_servers
@@ -378,6 +409,7 @@ class AsyncResilientKafkaConsumer:
         self.max_retries = max_retries
         self.base_delay = base_delay
         self.on_error_callback = on_error_callback
+        self.seek_to_end = seek_to_end  # New parameter to seek to end after assignment
         self.config_overrides = config_overrides
         self.consumer = None
         self.retry_count = 0
@@ -390,31 +422,92 @@ class AsyncResilientKafkaConsumer:
     async def _create_consumer(self):
         """Create a new consumer instance."""
         try:
-            self.consumer = create_kafka_consumer(
-                self.topic, 
-                self.group_id, 
-                self.bootstrap_servers, 
-                self.auto_offset_reset,
-                self.base_delay,
-                **self.config_overrides
+            logger.info(f"Creating new consumer for topic '{self.topic}' with group '{self.group_id}'")
+            
+            # Use asyncio.wait_for to add timeout to consumer creation
+            self.consumer = await asyncio.wait_for(
+                asyncio.get_event_loop().run_in_executor(
+                    None,
+                    create_kafka_consumer,
+                    self.topic,
+                    self.group_id,
+                    self.bootstrap_servers,
+                    self.auto_offset_reset,
+                    self.base_delay,
+                    **self.config_overrides
+                ),
+                timeout=30.0  # 30 second timeout for consumer creation
             )
+            
+            # If seek_to_end is enabled, wait for partition assignment and seek to end
+            if self.seek_to_end and self.consumer:
+                await self._setup_seek_to_end()
+            
             self.retry_count = 0
             self.last_error = None
             logger.info(f"AsyncResilientKafkaConsumer successfully created for topic '{self.topic}'")
             return True
+        except asyncio.TimeoutError:
+            self.last_error = "Consumer creation timeout"
+            logger.error(f"Timeout creating AsyncResilientKafkaConsumer for topic '{self.topic}' after 30 seconds")
+            return False
         except Exception as e:
             self.last_error = e
-            logger.error(f"Failed to create AsyncResilientKafkaConsumer: {e}")
+            logger.error(f"Failed to create AsyncResilientKafkaConsumer for topic '{self.topic}': {e}")
             return False
+    
+    async def _setup_seek_to_end(self):
+        """Setup consumer to seek to end of partitions (for cache services that only want latest data)."""
+        if not self.consumer:
+            return
+            
+        logger.info(f"Setting up seek to end for topic '{self.topic}'")
+        
+        # Wait for partition assignment with timeout
+        max_wait_time = 30  # Maximum wait time in seconds
+        wait_start = time.time()
+        
+        while not self.consumer.assignment():
+            if time.time() - wait_start > max_wait_time:
+                logger.error(f"Timeout waiting for partition assignment for topic '{self.topic}'")
+                return
+                
+            # Trigger partition assignment by polling briefly
+            try:
+                self.consumer.poll(timeout_ms=100)
+            except Exception as poll_error:
+                logger.warning(f"Error during partition assignment poll: {poll_error}")
+                return
+                
+            # Small async sleep to not block event loop
+            await asyncio.sleep(0.1)
+        
+        # Now that partitions are assigned, seek to end
+        try:
+            assigned_partitions = self.consumer.assignment()
+            logger.info(f"Partitions assigned for topic '{self.topic}': {assigned_partitions}")
+            
+            if assigned_partitions:
+                self.consumer.seek_to_end()  # Seek to end of all assigned partitions
+                logger.info(f"Successfully seeked to end of all partitions for topic '{self.topic}'")
+            else:
+                logger.warning(f"No partitions assigned for topic '{self.topic}'")
+                
+        except Exception as seek_error:
+            logger.error(f"Error seeking to end for topic '{self.topic}': {seek_error}")
+            # Don't fail consumer creation for seek errors, just log and continue
     
     async def _check_consumer_health(self):
         """Periodically check consumer health."""
         current_time = time.time()
         if current_time - self._last_health_check >= self._health_check_interval:
             self._last_health_check = current_time
+            logger.debug(f"Performing health check for consumer on topic '{self.topic}'")
             if self.consumer and not is_consumer_healthy(self.consumer):
                 logger.warning(f"Consumer health check failed for topic '{self.topic}', triggering reconnection")
                 await self._handle_consumer_error("Health check failed")
+            else:
+                logger.debug(f"Consumer health check passed for topic '{self.topic}'")
     
     async def consume_messages(self, message_handler: Union[Callable, Callable[[Any], Any]], 
                               commit_offset: bool = True, batch_processing: bool = False):
@@ -433,15 +526,27 @@ class AsyncResilientKafkaConsumer:
         self._running = True
         logger.info(f"AsyncResilientKafkaConsumer started for topic '{self.topic}'")
         
+        consecutive_empty_polls = 0
+        max_consecutive_empty_polls = 300  # 5 minutes of empty polls before health check
+        
         while self._running and not self._stop_event.is_set():
             try:
+                # Ensure consumer is available before proceeding
+                if not self.consumer:
+                    logger.warning(f"Consumer is None for topic '{self.topic}', attempting to recreate...")
+                    if not await self._create_consumer():
+                        logger.error(f"Failed to recreate consumer for topic '{self.topic}', sleeping before retry...")
+                        await asyncio.sleep(5)
+                        continue
+                
                 # Periodic health check
                 await self._check_consumer_health()
                 
-                # Use safe polling
+                # Use safe polling (now raises exceptions for reconnection)
                 message_batch = safe_kafka_poll(self.consumer, timeout_ms=1000)
                 
                 if message_batch:
+                    consecutive_empty_polls = 0  # Reset counter on successful poll
                     if batch_processing:
                         # Process entire batch at once
                         try:
@@ -516,23 +621,41 @@ class AsyncResilientKafkaConsumer:
                             try:
                                 logger.debug("Committing Kafka offsets for processed batch...")
                                 if not safe_kafka_commit(self.consumer):
-                                    logger.warning("Failed to commit offsets for processed batch")
+                                    logger.warning("Failed to commit offsets for processed batch - triggering reconnection")
+                                    # Commit failure indicates consumer is in bad state, trigger reconnection
+                                    await self._handle_consumer_error("Commit failure detected")
+                                    continue  # Skip to next iteration after error handling
                                 else:
                                     logger.debug("Batch offsets committed successfully")
                             except Exception as commit_err:
                                 logger.error(f"Error committing batch offsets: {commit_err}")
+                                # Any commit exception should trigger reconnection
+                                await self._handle_consumer_error(f"Commit exception: {commit_err}")
+                                continue  # Skip to next iteration after error handling
                         elif batch_failed:
                             logger.warning("Batch processing failed, offsets not committed. Messages may be reprocessed.")
                 else:
-                    # No messages, sleep briefly
+                    # No messages, increment counter and check for potential connection issues
+                    consecutive_empty_polls += 1
+                    
+                    # If we've had too many consecutive empty polls, force a health check
+                    if consecutive_empty_polls >= max_consecutive_empty_polls:
+                        logger.warning(f"No messages received for {max_consecutive_empty_polls} consecutive polls, forcing health check")
+                        if not is_consumer_healthy(self.consumer):
+                            logger.warning("Consumer health check failed after consecutive empty polls, triggering reconnection")
+                            await self._handle_consumer_error("Consumer unhealthy after consecutive empty polls")
+                            continue
+                        consecutive_empty_polls = 0  # Reset counter after health check
+                    
+                    # Sleep briefly
                     await asyncio.sleep(0.1)
                                 
             except (KafkaError, KafkaTimeoutError) as e:
-                logger.error(f"Kafka error in consumer loop: {e}")
+                logger.error(f"Kafka error in consumer loop for topic '{self.topic}': {e}")
                 await self._handle_consumer_error(str(e))
                 
             except Exception as e:
-                logger.error(f"Unexpected error in consumer loop: {e}")
+                logger.error(f"Unexpected error in consumer loop for topic '{self.topic}': {e}")
                 await self._handle_consumer_error(str(e))
                 
         logger.info("AsyncResilientKafkaConsumer stopped")
@@ -542,6 +665,8 @@ class AsyncResilientKafkaConsumer:
         self.last_error = error
         self.retry_count += 1
         
+        logger.error(f"Consumer error detected (attempt {self.retry_count}): {error}")
+        
         if self.max_retries and self.retry_count > self.max_retries:
             logger.error(f"Max retries ({self.max_retries}) exceeded. Stopping consumer.")
             await self.stop()
@@ -550,31 +675,39 @@ class AsyncResilientKafkaConsumer:
         # Close and recreate consumer
         if self.consumer:
             try:
+                logger.info("Closing existing consumer connection...")
                 self.consumer.close()
             except Exception as e:
                 logger.warning(f"Error closing consumer during recreation: {e}")
             self.consumer = None
         
+        # Calculate delay before retry
+        delay = self.base_delay * (2 ** min(self.retry_count - 1, 6))
+        logger.info(f"Attempting consumer recreation in {delay} seconds...")
+        await asyncio.sleep(delay)
+        
         # Try to recreate consumer
+        logger.info(f"Attempting to recreate consumer (attempt {self.retry_count})...")
         if await self._create_consumer():
             logger.info(f"Successfully recreated consumer after error (attempt {self.retry_count})")
             self.retry_count = 0  # Reset retry count on successful recreation
         else:
-            # Calculate delay and wait
-            delay = self.base_delay * (2 ** min(self.retry_count - 1, 6))
-            logger.info(f"Failed to recreate consumer, retrying in {delay} seconds...")
-            await asyncio.sleep(delay)
+            logger.error(f"Failed to recreate consumer on attempt {self.retry_count}")
+            # The retry will happen on the next iteration of the main loop
     
     async def stop(self):
         """Stop the consumer gracefully."""
+        logger.info(f"Stopping AsyncResilientKafkaConsumer for topic '{self.topic}'")
         self._running = False
         self._stop_event.set()
         if self.consumer:
             try:
+                logger.info(f"Closing consumer connection for topic '{self.topic}'")
                 self.consumer.close()
             except Exception as e:
-                logger.warning(f"Error closing consumer: {e}")
+                logger.warning(f"Error closing consumer for topic '{self.topic}': {e}")
             self.consumer = None
+        logger.info(f"AsyncResilientKafkaConsumer stopped for topic '{self.topic}'")
     
     def is_healthy(self):
         """Check if the consumer is healthy."""

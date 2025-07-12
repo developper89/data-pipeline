@@ -119,6 +119,7 @@ class AlarmMessage(BaseMessage):
     device_id: Optional[str] = Field(None, description="Device ID parameter of the sensor")
     created_at: Optional[datetime] = Field(None, description="When the alarm was created")
     updated_at: Optional[datetime] = Field(None, description="When the alarm was last updated")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Metadata of the alarm")
 
 class AlertMessage(BaseMessage):
     """

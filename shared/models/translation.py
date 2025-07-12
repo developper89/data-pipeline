@@ -1,5 +1,8 @@
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, TYPE_CHECKING
 from dataclasses import dataclass
+
+if TYPE_CHECKING:
+    from shared.translation.base import BaseTranslator
 
 @dataclass
 class RawData:
@@ -20,6 +23,7 @@ class TranslationResult:
     device_id: Optional[str] = None
     translator_used: Optional[str] = None
     translator_type: Optional[str] = None
+    translator: Optional['BaseTranslator'] = None  # The actual translator instance
     metadata: Dict[str, Any] = None
     error: Optional[str] = None
     raw_data: Optional['RawData'] = None

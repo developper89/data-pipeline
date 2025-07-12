@@ -136,7 +136,7 @@ class NormalizerService:
                 # Find the sensor using parameter field
                 sensor = await self.sensor_repository.find_one_by(parameter=raw_message.device_id)
                 if not sensor:
-                    logger.warning(f"[{request_id}] No sensor found with parameter {raw_message.device_id}")
+                    logger.debug(f"[{request_id}] No sensor found with parameter {raw_message.device_id}")
                     return True
                 
                 if not sensor.recording or not sensor.active:

@@ -94,7 +94,14 @@ class Validator:
         #     values = parsed_values
         #     parsing_applied = True
         # logger.debug(f"parsing_applied: {parsing_applied}, parsed_values: {parsed_values}")
-        # 4. Validate all values against the datatype
+        # 4. Align datatype arrays with standardized_data order and filter out unmatched labels/values
+        # This ensures that expected_types and other datatype arrays are in the same order as standardized_data
+        if standardized_data.labels and hasattr(datatype, 'labels') and datatype.labels:
+            datatype, standardized_data = self._align_datatype_with_standardized_data(datatype, standardized_data, request_id)
+            # Update values to use the filtered standardized_data
+            values = standardized_data.values
+
+        # 5. Validate all values against the datatype
         # data_type is now List[DatatypeType], pass full array for per-index validation
         expected_types = []
         if hasattr(datatype, 'data_type') and datatype.data_type:
@@ -114,7 +121,7 @@ class Validator:
                 request_id=request_id
             ))
         
-        # 5. Validate range for all values
+        # 6. Validate range for all values
         range_valid, range_results, range_errors = self._validate_range(
             converted_values,
             datatype,
@@ -129,7 +136,7 @@ class Validator:
                 request_id=request_id
             ))
         
-        # 6. Build validated output with partial validation support
+        # 7. Build validated output with partial validation support
         # Filter out invalid values but keep valid ones
         if converted_values and range_results:
             # Combine type and range validation results to determine which values are valid
@@ -361,6 +368,154 @@ class Validator:
         except Exception as e:
             logger.error(f"Auto-discovery error for datatype {datatype.id} from device {device_id}: {e}")
             return datatype  # Return original datatype even if auto-discovery fails
+
+    def _align_datatype_with_standardized_data(
+        self, 
+        datatype: Any, 
+        standardized_data: StandardizedOutput, 
+        request_id: Optional[str] = None
+    ) -> Tuple[Any, StandardizedOutput]:
+        """
+        Align datatype arrays (data_type, min, max, unit, display_names, persist, labels) 
+        to match the order of standardized_data.labels, and filter out unmatched labels/values.
+        
+        This ensures that type validation and other validations use the correct 
+        constraints for each value based on label matching.
+        
+        Args:
+            datatype: The datatype object to align
+            standardized_data: StandardizedOutput containing the reference label order
+            request_id: Optional request ID for logging
+            
+        Returns:
+            Tuple of (aligned_datatype, filtered_standardized_data)
+        """
+        try:
+            # Get labels from both sources
+            std_labels = standardized_data.labels
+            dt_labels = datatype.labels
+            
+            if not std_labels or not dt_labels:
+                logger.debug(f"[{request_id}] No labels to align - standardized_data.labels: {bool(std_labels)}, datatype.labels: {bool(dt_labels)}")
+                return datatype, standardized_data
+            
+            # Create mapping from datatype labels to their indices
+            dt_label_to_index = {label: i for i, label in enumerate(dt_labels)}
+            
+            # Find matched labels and their indices
+            matched_std_indices = []  # Indices in standardized_data that have matches
+            matched_dt_indices = []   # Corresponding indices in datatype
+            matched_labels = []
+            unmatched_labels = []
+            
+            for std_idx, std_label in enumerate(std_labels):
+                if std_label in dt_label_to_index:
+                    matched_std_indices.append(std_idx)
+                    matched_dt_indices.append(dt_label_to_index[std_label])
+                    matched_labels.append(std_label)
+                else:
+                    unmatched_labels.append(std_label)
+            
+            # Log any unmatched labels
+            if unmatched_labels:
+                logger.warning(f"[{request_id}] Unmatched labels in standardized_data will be filtered out: {unmatched_labels}")
+            
+            if not matched_std_indices:
+                logger.error(f"[{request_id}] No matching labels found between standardized_data and datatype")
+                return datatype, standardized_data
+            
+            # Filter standardized_data to only include matched values/labels
+            import copy
+            filtered_standardized_data = copy.deepcopy(standardized_data)
+            
+            # Filter values and labels arrays based on matched indices
+            filtered_values = [standardized_data.values[i] for i in matched_std_indices]
+            filtered_labels = [standardized_data.labels[i] for i in matched_std_indices]
+            
+            # Filter display_names if they exist
+            filtered_display_names = None
+            if standardized_data.display_names:
+                filtered_display_names = [standardized_data.display_names[i] for i in matched_std_indices]
+            
+            # Update the filtered standardized_data
+            filtered_standardized_data.values = filtered_values
+            filtered_standardized_data.labels = filtered_labels
+            filtered_standardized_data.display_names = filtered_display_names
+            
+            # Helper function to reorder an array based on matched datatype indices
+            def reorder_array(array, default_value=None):
+                if not array:
+                    return array
+                
+                reordered = []
+                for dt_index in matched_dt_indices:
+                    if dt_index < len(array):
+                        reordered.append(array[dt_index])
+                    else:
+                        # Use default value or first array element as fallback
+                        fallback = default_value if default_value is not None else (array[0] if array else None)
+                        reordered.append(fallback)
+                return reordered
+            
+            # Reorder all datatype arrays to match filtered standardized_data order
+            aligned_datatype = copy.deepcopy(datatype)
+            
+            # Reorder each array that exists in the datatype
+            if hasattr(aligned_datatype, 'data_type') and aligned_datatype.data_type:
+                reordered_data_type = reorder_array(aligned_datatype.data_type)
+                # Convert string data types to DatatypeType enums if needed
+                from preservarium_sdk.domain.model.datatype import DatatypeType
+                converted_data_type = []
+                for dt in reordered_data_type:
+                    if isinstance(dt, str):
+                        if dt == 'number':
+                            converted_data_type.append(DatatypeType.NUMBER)
+                        elif dt == 'boolean':
+                            converted_data_type.append(DatatypeType.BOOLEAN)
+                        elif dt == 'string':
+                            converted_data_type.append(DatatypeType.STRING)
+                        elif dt == 'datetime':
+                            converted_data_type.append(DatatypeType.DATETIME)
+                        elif dt == 'list':
+                            converted_data_type.append(DatatypeType.LIST)
+                        elif dt == 'object':
+                            converted_data_type.append(DatatypeType.OBJECT)
+                        elif dt == 'bytes':
+                            converted_data_type.append(DatatypeType.BYTES)
+                        else:
+                            converted_data_type.append(DatatypeType.NUMBER)  # Default fallback
+                    else:
+                        converted_data_type.append(dt)  # Already a DatatypeType enum
+                aligned_datatype.data_type = converted_data_type
+                
+            if hasattr(aligned_datatype, 'min') and aligned_datatype.min:
+                aligned_datatype.min = reorder_array(aligned_datatype.min)
+                
+            if hasattr(aligned_datatype, 'max') and aligned_datatype.max:
+                aligned_datatype.max = reorder_array(aligned_datatype.max)
+                
+            if hasattr(aligned_datatype, 'unit') and aligned_datatype.unit:
+                aligned_datatype.unit = reorder_array(aligned_datatype.unit, "")
+                
+            if hasattr(aligned_datatype, 'display_names') and aligned_datatype.display_names:
+                aligned_datatype.display_names = reorder_array(aligned_datatype.display_names, "")
+                
+            if hasattr(aligned_datatype, 'persist') and aligned_datatype.persist:
+                aligned_datatype.persist = reorder_array(aligned_datatype.persist, False)
+                
+            if hasattr(aligned_datatype, 'labels') and aligned_datatype.labels:
+                aligned_datatype.labels = reorder_array(aligned_datatype.labels, "")
+            
+            # Log successful alignment
+            matched_count = len(matched_std_indices)
+            total_count = len(std_labels)
+            logger.debug(f"[{request_id}] Aligned datatype arrays: {matched_count}/{total_count} labels matched, {total_count - matched_count} unmatched labels filtered out")
+            
+            return aligned_datatype, filtered_standardized_data
+            
+        except Exception as e:
+            logger.error(f"[{request_id}] Error aligning datatype with standardized_data: {e}")
+            return datatype, standardized_data  # Return original objects if alignment fails
 
     def _validate_range(self, values: List[Any], datatype: Any, standardized_data: StandardizedOutput) -> Tuple[bool, List[bool], List[str]]:
         """
@@ -637,6 +792,7 @@ class Validator:
             "datatype_type": datatype_type_strings,
             "datatype_category": str(datatype.category),
             "persist": datatype.persist,
+            **standardized_data.metadata,
         }
         
         # Create ValidatedOutput for internal tracking (no metadata)

@@ -66,41 +66,13 @@ class CacheService:
             group_id=config.KAFKA_CONSUMER_GROUP_ID,
             bootstrap_servers=config.KAFKA_BOOTSTRAP_SERVERS,
             auto_offset_reset="latest",  # Only cache latest messages
+            seek_to_end=True,  # Seek to end of partitions for cache service (only latest data)
             on_error_callback=self._on_consumer_error
         )
         
-        # For caching service, we want to seek to end after consumer assignment
-        # This is handled by setting seek_to_end=True in a custom initialization
-        await self._setup_consumer_partitions()
-            
         logger.info("Cache Service initialized successfully")
         return True
     
-    async def _setup_consumer_partitions(self):
-        """Setup consumer to seek to end of partitions (cache only latest data)."""
-        # Create a temporary consumer to handle partition assignment and seeking
-        if self.resilient_consumer and self.resilient_consumer.consumer:
-            consumer = self.resilient_consumer.consumer
-            
-            # Wait for partition assignment
-            max_wait_time = 30  # Maximum wait time in seconds
-            wait_start = asyncio.get_event_loop().time()
-            
-            while not consumer.assignment():
-                if asyncio.get_event_loop().time() - wait_start > max_wait_time:
-                    logger.error("Timeout waiting for partition assignment")
-                    return
-                    
-                # Poll to trigger partition assignment
-                consumer.poll(timeout_ms=100)
-                await asyncio.sleep(0.1)
-            
-            # Now that partitions are assigned, seek to end
-            assigned_partitions = consumer.assignment()
-            logger.info(f"Partitions assigned: {assigned_partitions}")
-            consumer.seek_to_end()  # Seek to end of all assigned partitions
-            logger.info("Successfully seeked to end of all partitions")
-        
     async def run(self):
         """
         Main service loop that consumes messages and caches metadata using AsyncResilientKafkaConsumer.

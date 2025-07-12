@@ -219,8 +219,8 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                         except Exception as e:
                             logger.error(f"[{request_id}] Error handling pending commands: {e}")
                             # Continue with normal processing if command handling fails
-                    logger.info(f"[{request_id}] Raw message published")
-                    return aiocoap.Message(code=aiocoap.Code.CONTENT, payload=b"Raw message published")
+
+                    return aiocoap.Message(mtype=aiocoap.ACK, code=aiocoap.Code.CONTENT, token=request.token)
                     
                 except Exception as e:
                     logger.error(f"[{request_id}] Failed to create RawMessage: {e}")
@@ -232,22 +232,6 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         logger.warning(f"[{request_id}] Bad request - invalid endpoint or missing device data")
         return aiocoap.Message(code=aiocoap.Code.BAD_REQUEST, payload=b"Bad Request - Invalid endpoint or missing device data")
 
-    # def _add_time_to_command(self, command_payload: bytes) -> bytes:
-    #     """Add current time to command payload if it's a ProtoConfig."""
-    #     try:
-    #         from your_proto_module import ProtoConfig
-            
-    #         # Try to parse as ProtoConfig and add time
-    #         config = ProtoConfig()
-    #         config.ParseFromString(command_payload)
-    #         config.current_time = int(time.time())
-            
-    #         return config.SerializeToString()
-    #     except Exception:
-    #         # If parsing fails, return original payload
-    #         logger.warning("Could not add time to command payload")
-    #         return command_payload
-        
     def _extract_device_id_using_translation(self, request, request_id: str) -> TranslationResult:
         """Extract device ID using the translation layer."""
         try:

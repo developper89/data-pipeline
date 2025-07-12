@@ -26,9 +26,11 @@ class TranslationManager:
                 logger.debug(f"Using translator: {translator.__class__.__name__}")
                 result = translator.extract_device_id(raw_data)  # Use translate method instead
                 
-                # If successful, return the result
+                # If successful, return the result with translator instance
                 if result.success and result.device_id:
                     logger.debug(f"Successfully extracted device ID '{result.device_id}' using {translator.__class__.__name__}")
+                    # Add the translator instance to the result
+                    result.translator = translator
                     return result
                 else:
                     logger.debug(f"Translator {translator.__class__.__name__} failed or returned no device ID")

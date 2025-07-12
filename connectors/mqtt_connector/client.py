@@ -1,5 +1,6 @@
 # mqtt_connector/client.py
 import logging
+import asyncio
 import paho.mqtt.client as paho
 from paho import mqtt
 import base64
@@ -49,9 +50,10 @@ class CertificateManager:
         self.temp_files = []
 
 class MQTTClientWrapper:
-    def __init__(self, kafka_producer: KafkaMsgProducer):
+    def __init__(self, kafka_producer: KafkaMsgProducer, event_loop=None):
         self.kafka_producer = kafka_producer
         self.cert_manager = CertificateManager()
+        self.event_loop = event_loop  # Reference to main async event loop
         # Use MQTTv311 instead of MQTTv5 as the broker may not support v5
         self.client = paho.Client(client_id=config.MQTT_CLIENT_ID, protocol=paho.MQTTv311)
         self._setup_callbacks()
@@ -217,7 +219,17 @@ class MQTTClientWrapper:
             return True
         except Exception as e:
             logger.exception(f"Error publishing MQTT message: {e}")
-            self.kafka_producer.publish_error("MQTT Publish Error", str(e), {"topic": topic})
+            # Schedule the async error publish
+            if self.event_loop and not self.event_loop.is_closed():
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        self.kafka_producer.publish_error("MQTT Publish Error", str(e), {"topic": topic}),
+                        self.event_loop
+                    )
+                except Exception as publish_error:
+                    logger.error(f"Failed to schedule error publish: {publish_error}")
+            else:
+                logger.warning("Cannot publish error to Kafka: no event loop reference available")
             return False
 
     # --- Callback Implementations ---
@@ -347,12 +359,32 @@ class MQTTClientWrapper:
                 logger.info(f"Extracted device_id: {device_id}")
                 logger.info(f"payload_hex is: {raw_message.payload_hex}")
             
-            # Publish to Kafka
-            self.kafka_producer.publish_raw_message(raw_message)
+            # Publish to Kafka - schedule the async call in the main event loop
+            if self.event_loop and not self.event_loop.is_closed():
+                try:
+                    # Schedule the coroutine to run in the main event loop from this thread
+                    asyncio.run_coroutine_threadsafe(
+                        self.kafka_producer.publish_raw_message(raw_message),
+                        self.event_loop
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to schedule Kafka publish: {e}")
+            else:
+                logger.error("Cannot publish to Kafka: no event loop reference available")
 
         except Exception as e:
             logger.exception(f"Error processing MQTT message from topic {msg.topic}: {e}")
-            self.kafka_producer.publish_error("MQTT Message Processing Error", str(e), {"topic": msg.topic})
+            # Schedule the async error publish
+            if self.event_loop and not self.event_loop.is_closed():
+                try:
+                    asyncio.run_coroutine_threadsafe(
+                        self.kafka_producer.publish_error("MQTT Message Processing Error", str(e), {"topic": msg.topic}),
+                        self.event_loop
+                    )
+                except Exception as publish_error:
+                    logger.error(f"Failed to schedule error publish: {publish_error}")
+            else:
+                logger.warning("Cannot publish error to Kafka: no event loop reference available")
 
     def on_log(self, client, userdata, level, buf):
         if level == mqtt.MQTT_LOG_INFO:

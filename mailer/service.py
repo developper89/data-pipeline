@@ -47,8 +47,8 @@ class MailerService:
             self.running = True
             logger.info(f"{config.SERVICE_NAME} started successfully")
             
-            # Wait for shutdown signal
-            await self._shutdown_event.wait()
+            # Start consuming alerts
+            await self.alert_consumer.consume_alerts()
             
             return True
             

@@ -1,2 +1,4 @@
 docker build -f connectors/coap_connector/Dockerfile -t coap-connector:latest .
+docker build -f connectors/mqtt_connector/Dockerfile -t mqtt-connector:latest .
 docker rm -f coap-connector
+docker rm -f mqtt-connector

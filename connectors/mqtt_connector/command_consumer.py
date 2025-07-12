@@ -1,14 +1,10 @@
 # mqtt_connector/command_consumer.py
 import logging
 import json
-import threading
+import asyncio
 from typing import Dict, Any, Optional
-import time
 
-from kafka import KafkaConsumer
-from kafka.errors import KafkaError
-
-from shared.mq.kafka_helpers import create_kafka_consumer
+from shared.mq.kafka_helpers import AsyncResilientKafkaConsumer
 from client import MQTTClientWrapper
 import config
 
@@ -17,7 +13,7 @@ logger = logging.getLogger(__name__)
 class CommandConsumer:
     """
     Consumes device command messages from Kafka and publishes them to MQTT topics.
-    Runs in a separate thread to avoid blocking the MQTT client loop.
+    Uses AsyncResilientKafkaConsumer for automatic error handling and reconnection.
     """
     
     def __init__(self, mqtt_client: MQTTClientWrapper):
@@ -28,99 +24,113 @@ class CommandConsumer:
             mqtt_client: The MQTT client wrapper to use for publishing
         """
         self.mqtt_client = mqtt_client
-        self.consumer = None
+        self.resilient_consumer = None  # Use AsyncResilientKafkaConsumer
         self.running = False
-        self.thread = None
+        self._consumer_task = None
 
-    def start(self):
-        """Start the command consumer thread."""
+    async def start(self):
+        """Start the command consumer with AsyncResilientKafkaConsumer."""
         if self.running:
-            logger.warning("Command consumer thread already running")
+            logger.warning("Command consumer already running")
             return
+            
+        # Initialize resilient consumer
+        self.resilient_consumer = AsyncResilientKafkaConsumer(
+            topic=config.KAFKA_DEVICE_COMMANDS_TOPIC,
+            group_id=f"{config.MQTT_CLIENT_ID}_command_consumer",
+            bootstrap_servers=config.KAFKA_BOOTSTRAP_SERVERS,
+            auto_offset_reset='latest',  # Only consume new messages
+            on_error_callback=self._on_consumer_error
+        )
             
         self.running = True
-        self.thread = threading.Thread(target=self._consume_loop, daemon=True)
-        self.thread.start()
-        logger.info("Command consumer thread started")
+        
+        # Start consuming in a separate asyncio task
+        self._consumer_task = asyncio.create_task(self._consume_commands())
+        
+        logger.info("Async command consumer started")
 
-    def stop(self):
-        """Stop the command consumer thread."""
+    async def stop(self):
+        """Stop the command consumer."""
         if not self.running:
-            logger.warning("Command consumer thread not running")
+            logger.warning("Command consumer not running")
             return
             
         self.running = False
-        if self.thread:
-            self.thread.join(timeout=5)
-            self.thread = None
-            
-        self._close_consumer()
-        logger.info("Command consumer thread stopped")
-
-    def _consume_loop(self):
-        """Main loop for consuming command messages."""
-        retry_delay = 5  # Initial retry delay in seconds
-        max_retry_delay = 60  # Maximum retry delay in seconds
         
-        while self.running:
+        # Stop the resilient consumer
+        if self.resilient_consumer:
+            await self.resilient_consumer.stop()
+            
+        # Wait for consumer task to finish
+        if self._consumer_task and not self._consumer_task.done():
             try:
-                # Create the consumer if it doesn't exist
-                if not self.consumer:
-                    self.consumer = create_kafka_consumer(
-                        topic=config.KAFKA_DEVICE_COMMANDS_TOPIC,
-                        group_id=f"{config.MQTT_CLIENT_ID}_command_consumer",
-                        bootstrap_servers=config.KAFKA_BOOTSTRAP_SERVERS,
-                        auto_offset_reset='latest'  # Only consume new messages
-                    )
-                    if not self.consumer:
-                        logger.error("Failed to create Kafka consumer, will retry...")
-                        time.sleep(retry_delay)
-                        retry_delay = min(retry_delay * 2, max_retry_delay)  # Exponential backoff
-                        continue
-                    
-                    retry_delay = 5  # Reset retry delay on successful connection
-                
-                # Poll for messages
-                message_batch = self.consumer.poll(timeout_ms=1000)
-                
-                if not message_batch:
-                    # No messages, continue polling
-                    time.sleep(0.1)
-                    continue
-                
-                # Process received messages
-                for tp, messages in message_batch.items():
-                    for message in messages:
-                        if not self.running:
-                            break
-                            
-                        self._process_command(message.value)
-                
-                # Commit offsets
-                self.consumer.commit()
-                    
-            except KafkaError as e:
-                logger.error(f"Kafka error in command consumer: {e}")
-                self._close_consumer()
-                time.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, max_retry_delay)
-            except Exception as e:
-                logger.exception(f"Unexpected error in command consumer: {e}")
-                time.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, max_retry_delay)
+                await asyncio.wait_for(self._consumer_task, timeout=5.0)
+            except asyncio.TimeoutError:
+                logger.warning("Command consumer task did not finish within timeout")
+                self._consumer_task.cancel()
+                try:
+                    await self._consumer_task
+                except asyncio.CancelledError:
+                    pass
+            
+        logger.info("Async command consumer stopped")
+
+    async def _consume_commands(self):
+        """Start consuming command messages using AsyncResilientKafkaConsumer."""
+        if not self.resilient_consumer:
+            logger.error("Cannot start consuming: AsyncResilientKafkaConsumer not initialized")
+            return
+            
+        try:
+            # This handles all the complexity: polling, error recovery, reconnection, etc.
+            await self.resilient_consumer.consume_messages(
+                message_handler=self._process_command_message,
+                commit_offset=True
+            )
+        except Exception as e:
+            logger.exception(f"Fatal error in command consumer: {e}")
+            self.running = False
+
+    async def _process_command_message(self, message):
+        """
+        Process a single command message.
+        
+        Args:
+            message: Kafka message object
+            
+        Returns:
+            True if processing was successful, False otherwise
+        """
+        try:
+            # Process the command
+            success = await self._process_command(message.value)
+            return success
+            
+        except Exception as e:
+            logger.exception(f"Unexpected error processing command message: {e}")
+            return False  # Don't commit offset on error
     
-    def _process_command(self, command_data: Dict[str, Any]):
+    async def _on_consumer_error(self, error, context):
+        """Handle consumer-level errors."""
+        logger.error(f"Consumer error: {error}")
+        # Could implement additional error handling logic here if needed
+    
+    async def _process_command(self, command_data: Dict[str, Any]) -> bool:
         """
         Process a command message and publish it to MQTT.
         
         Args:
             command_data: The command data from Kafka
+            
+        Returns:
+            True if processing was successful, False otherwise
         """
         try:
             # Check if this is an MQTT command
             if command_data.get('protocol', '').lower() != 'mqtt':
                 logger.debug(f"Ignoring non-MQTT command: {command_data.get('protocol')}")
-                return
+                return True  # Successfully ignored
                 
             # Extract required fields
             device_id = command_data.get('device_id')
@@ -132,7 +142,7 @@ class CommandConsumer:
             topic = metadata.get('topic', None)
             if not topic:
                 logger.error(f"[{request_id}] MQTT command missing topic in metadata for device {device_id}")
-                return
+                return False
             
             # Extract optional MQTT-specific fields from metadata
             qos = metadata.get('qos', None)
@@ -140,33 +150,27 @@ class CommandConsumer:
             
             if not device_id or payload is None:
                 logger.error(f"[{request_id}] Invalid command message: missing required fields")
-                return
+                return False
                 
             logger.info(f"[{request_id}] Processing command for device {device_id} on topic {topic}")
             
-            # Publish the message to MQTT
-            success = self.mqtt_client.publish_message(
-                topic=topic,
-                payload=payload,
-                qos=qos,
-                retain=retain
+            # Publish the message to MQTT using executor for the synchronous call
+            success = await asyncio.get_event_loop().run_in_executor(
+                None,
+                self.mqtt_client.publish_message,
+                topic,
+                payload,
+                qos,
+                retain
             )
             
             if success:
                 logger.info(f"[{request_id}] Successfully published command to {topic}")
+                return True
             else:
                 logger.error(f"[{request_id}] Failed to publish command to {topic}")
+                return False
                 
         except Exception as e:
             logger.exception(f"Error processing command: {e}")
-    
-    def _close_consumer(self):
-        """Close the Kafka consumer if it exists."""
-        if self.consumer:
-            try:
-                self.consumer.close()
-                logger.info("Kafka command consumer closed")
-            except Exception as e:
-                logger.error(f"Error closing Kafka consumer: {e}")
-            finally:
-                self.consumer = None 
+            return False 

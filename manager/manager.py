@@ -27,6 +27,16 @@ if HOST_SHARED_PATH:
     logger.info(f"Using host shared path from environment: {HOST_SHARED_PATH}")
 else:
     logger.warning("HOST_SHARED_PATH environment variable not set. Volume mounting may fail.")
+HOST_STORAGE_PATH = os.getenv('HOST_STORAGE_PATH')
+if HOST_STORAGE_PATH:
+    logger.info(f"Using host storage path from environment: {HOST_STORAGE_PATH}")
+else:
+    logger.warning("HOST_STORAGE_PATH environment variable not set. Storage may fail.")
+HOST_CONNECTORS_PATH = os.getenv('HOST_CONNECTORS_PATH')
+if HOST_CONNECTORS_PATH:
+    logger.info(f"Using host connectors path from environment: {HOST_CONNECTORS_PATH}")
+else:
+    logger.warning("HOST_CONNECTORS_PATH environment variable not set. Live code updates may not work.")
 
 def load_config(path: str) -> dict:
     """Load and parse the YAML configuration file."""
@@ -116,11 +126,17 @@ def create_connector_container(client: docker.DockerClient, connector_config: di
         ensure_network_exists(client)
 
         volumes = {}
-        
+        if HOST_STORAGE_PATH:
+            volumes[HOST_STORAGE_PATH] = {"bind": "/app/storage", "mode": "rw"}
+            logger.info(f"Using host path for storage volume: {HOST_STORAGE_PATH}:/app/storage")
         # Add shared volume mount if host path is available
         if HOST_SHARED_PATH:
             volumes[HOST_SHARED_PATH] = {"bind": "/app/shared", "mode": "rw"}
             logger.info(f"Using host path for shared volume: {HOST_SHARED_PATH}:/app/shared")
+        # Add connectors volume mount for live code updates
+        if HOST_CONNECTORS_PATH:
+            volumes[HOST_CONNECTORS_PATH] = {"bind": "/app/connectors", "mode": "rw"}
+            logger.info(f"Using host path for connectors volume: {HOST_CONNECTORS_PATH}:/app/connectors")
         logger.info(f"Volumes: {volumes}")
         
         # Setup environment variables
@@ -244,8 +260,12 @@ def get_expected_container_config(connector_config: dict) -> dict:
     
     # Setup expected volumes
     expected_volumes = {}
+    if HOST_STORAGE_PATH:
+        expected_volumes[HOST_STORAGE_PATH] = {"bind": "/app/storage", "mode": "rw"}
     if HOST_SHARED_PATH:
         expected_volumes[HOST_SHARED_PATH] = {"bind": "/app/shared", "mode": "rw"}
+    if HOST_CONNECTORS_PATH:
+        expected_volumes[HOST_CONNECTORS_PATH] = {"bind": "/app/connectors", "mode": "rw"}
     
     return {
         "image": connector_config["image"],

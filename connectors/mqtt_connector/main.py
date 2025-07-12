@@ -2,11 +2,9 @@
 import logging
 import signal
 import sys
-import time
+import asyncio
+import threading
 import os
-
-# Add the shared directory to the Python path
-# sys.path.insert(0, '/app/shared')
 
 from kafka_producer import KafkaMsgProducer
 from shared.mq.kafka_helpers import create_kafka_producer
@@ -33,16 +31,27 @@ logging.getLogger("shared.translation").setLevel(log_level)
 
 logger = logging.getLogger(__name__)
 
+# Global variables for graceful shutdown
 kafka_producer_instance = None
 mqtt_client_wrapper = None
 command_consumer = None
+shutdown_event = None
+mqtt_thread = None
 
-def main():
-    global kafka_producer_instance, mqtt_client_wrapper, command_consumer
+async def main():
+    """Main async function."""
+    global kafka_producer_instance, mqtt_client_wrapper, command_consumer, shutdown_event, mqtt_thread
 
-    logger.info("Starting MQTT Connector Service...")
-
+    logger.info("Starting Hybrid MQTT Connector Service...")
+    
+    # Create shutdown event
+    shutdown_event = asyncio.Event()
+    
     # Setup signal handlers
+    def signal_handler(signum, frame):
+        logger.warning(f"Received signal {signum}. Initiating graceful shutdown...")
+        shutdown_event.set()
+    
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
 
@@ -54,42 +63,43 @@ def main():
 
         kafka_msg_prod = KafkaMsgProducer(kafka_producer_instance)
         
-        # Initialize MQTT Client
-        mqtt_client_wrapper = MQTTClientWrapper(kafka_msg_prod)
+        # Initialize MQTT Client with event loop reference
+        event_loop = asyncio.get_running_loop()
+        mqtt_client_wrapper = MQTTClientWrapper(kafka_msg_prod, event_loop)
         mqtt_client_wrapper.connect()  # Initiate connection
         
-        # Initialize and start the command consumer
+        # Start MQTT client in a separate thread
+        mqtt_thread = threading.Thread(target=mqtt_client_wrapper.start_loop, daemon=True)
+        mqtt_thread.start()
+        logger.info("MQTT client started in background thread")
+        
+        # Initialize and start the async command consumer
         command_consumer = CommandConsumer(mqtt_client_wrapper)
-        command_consumer.start()
-        logger.info("Command consumer started")
+        await command_consumer.start()
+        logger.info("Async command consumer started")
 
-        # Start MQTT blocking loop (handles reconnects)
-        mqtt_client_wrapper.start_loop()
+        # Wait for shutdown signal
+        await shutdown_event.wait()
+        
+        logger.info("Shutdown event received, stopping services...")
 
     except Exception as e:
         logger.exception(f"Fatal error during MQTT Connector execution: {e}")
         sys.exit(1)
     finally:
-        # Cleanup is handled by signal_handler or upon loop exit
-        logger.info("MQTT Connector main function finished.")
-        cleanup()
+        # Cleanup
+        await cleanup()
 
-def signal_handler(signum, frame):
-    """Handles shutdown signals."""
-    logger.warning(f"Received signal {signum}. Initiating graceful shutdown...")
-    cleanup()
-    sys.exit(0)
-
-def cleanup():
-    """Perform graceful shutdown."""
-    global kafka_producer_instance, mqtt_client_wrapper, command_consumer
-    logger.info("Starting cleanup...")
+async def cleanup():
+    """Perform graceful async cleanup."""
+    global kafka_producer_instance, mqtt_client_wrapper, command_consumer, mqtt_thread
+    logger.info("Starting async cleanup...")
     
     # Stop the command consumer first
     if command_consumer:
-        logger.info("Stopping command consumer...")
+        logger.info("Stopping async command consumer...")
         try:
-            command_consumer.stop()
+            await command_consumer.stop()
         except Exception as e:
             logger.error(f"Error stopping command consumer: {e}")
         command_consumer = None
@@ -100,17 +110,38 @@ def cleanup():
             mqtt_client_wrapper.stop_loop()
         except Exception as e:
             logger.error(f"Error stopping MQTT client: {e}")
-        mqtt_client_wrapper = None  # Allow garbage collection
+        mqtt_client_wrapper = None
+    
+    # Wait for MQTT thread to finish
+    if mqtt_thread and mqtt_thread.is_alive():
+        logger.info("Waiting for MQTT thread to finish...")
+        mqtt_thread.join(timeout=5.0)
+        if mqtt_thread.is_alive():
+            logger.warning("MQTT thread did not finish within timeout")
 
     if kafka_producer_instance:
         logger.info("Closing Kafka producer...")
         try:
-            kafka_producer_instance.close()
+            # Run the synchronous close in an executor
+            await asyncio.get_event_loop().run_in_executor(
+                None, kafka_producer_instance.close
+            )
         except Exception as e:
             logger.error(f"Error closing Kafka producer: {e}")
         kafka_producer_instance = None
 
-    logger.info("Cleanup complete.")
+    logger.info("Async cleanup complete.")
+
+def run_async_main():
+    """Run the async main function."""
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("Keyboard interrupt received")
+    except Exception as e:
+        logger.exception(f"Error in async main: {e}")
+    finally:
+        logger.info("MQTT Connector service finished.")
 
 if __name__ == "__main__":
-    main()
+    run_async_main()

@@ -14,19 +14,34 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
 }
 
-# Function to safely kill a process by PID
+# Function to safely kill a process by PID (handles both local and remote)
 safe_kill() {
     local pid=$1
     local process_name=$2
     
-    if kill -0 "$pid" 2>/dev/null; then
-        kill -TERM "$pid" 2>/dev/null
-        sleep 2
+    if [[ "$process_name" == "SERVER_RELAY" ]]; then
+        # Handle remote process
+        if ssh pres "kill -0 $pid" 2>/dev/null; then
+            ssh pres "kill -TERM $pid" 2>/dev/null
+            sleep 2
+            if ssh pres "kill -0 $pid" 2>/dev/null; then
+                ssh pres "kill -KILL $pid" 2>/dev/null
+                log "Force killed remote $process_name (PID: $pid)"
+            else
+                log "Gracefully stopped remote $process_name (PID: $pid)"
+            fi
+        fi
+    else
+        # Handle local process
         if kill -0 "$pid" 2>/dev/null; then
-            kill -KILL "$pid" 2>/dev/null
-            log "Force killed $process_name (PID: $pid)"
-        else
-            log "Gracefully stopped $process_name (PID: $pid)"
+            kill -TERM "$pid" 2>/dev/null
+            sleep 2
+            if kill -0 "$pid" 2>/dev/null; then
+                kill -KILL "$pid" 2>/dev/null
+                log "Force killed $process_name (PID: $pid)"
+            else
+                log "Gracefully stopped $process_name (PID: $pid)"
+            fi
         fi
     fi
 }
@@ -56,12 +71,51 @@ safe_port_cleanup() {
 test_tunnel() {
     # Test if we can establish SSH connection
     if ! ssh -o ConnectTimeout=5 -o BatchMode=yes pres exit >/dev/null 2>&1; then
+        log "SSH connection test failed"
         return 1
     fi
     
     # Test if local port is responding
     if ! nc -z localhost 5684 >/dev/null 2>&1; then
+        log "Local port 5684 test failed"
         return 1
+    fi
+    
+    # Test if remote port forward is working
+    if ! ssh -o ConnectTimeout=5 -o BatchMode=yes pres "nc -z localhost 5684" >/dev/null 2>&1; then
+        log "Remote port forward test failed"
+        return 1
+    fi
+    
+    # Test if remote socat process is actually running
+    if ! ssh pres "pgrep -f 'socat.*5683'" >/dev/null 2>&1; then
+        log "Remote socat process not found"
+        return 1
+    fi
+    
+    # Test if all tracked processes are actually running
+    if [ -f "$PID_FILE" ]; then
+        while read -r pid_line; do
+            if [ -n "$pid_line" ]; then
+                process_name=$(echo "$pid_line" | cut -d: -f1)
+                pid=$(echo "$pid_line" | cut -d: -f2)
+                
+                case "$process_name" in
+                    "SERVER_RELAY")
+                        if ! ssh pres "kill -0 $pid" 2>/dev/null; then
+                            log "Remote process $process_name (PID: $pid) is not running"
+                            return 1
+                        fi
+                        ;;
+                    *)
+                        if ! kill -0 "$pid" 2>/dev/null; then
+                            log "Local process $process_name (PID: $pid) is not running"
+                            return 1
+                        fi
+                        ;;
+                esac
+            fi
+        done < "$PID_FILE"
     fi
     
     return 0
@@ -74,8 +128,9 @@ start_tunnel() {
     # Clean up any existing processes
     cleanup_tunnel
     
-    # Start SSH tunnel with keep-alive
+    # Start SSH tunnel with keep-alive (disable control master for this tunnel)
     ssh -o ServerAliveInterval=60 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
+        -o ControlMaster=no -o ControlPath=none \
         -R 5684:localhost:5684 pres -N &
     SSH_PID=$!
     echo "SSH_TUNNEL:$SSH_PID" > "$PID_FILE"
@@ -83,25 +138,30 @@ start_tunnel() {
     
     sleep 3
     
-    # Verify SSH tunnel is working
+    # Verify SSH tunnel is working by checking process and port
     if ! kill -0 "$SSH_PID" 2>/dev/null; then
-        log "ERROR: SSH tunnel failed to start"
+        log "ERROR: SSH tunnel process failed to start"
         return 1
     fi
     
-    # Start server-side UDP relay
-    ssh pres "nohup sudo socat UDP4-LISTEN:5683,fork TCP:localhost:5684 >/dev/null 2>&1 &" &
-    SERVER_RELAY_PID=$!
+    # Additional verification - check if the port forward is actually working
+    if ! ssh -o ConnectTimeout=5 -o BatchMode=yes pres "nc -z localhost 5684" >/dev/null 2>&1; then
+        log "ERROR: SSH tunnel port forward not working"
+        return 1
+    fi
+    
+    # Start server-side UDP relay and get the actual remote PID
+    SERVER_RELAY_PID=$(ssh pres "nohup sudo socat UDP4-LISTEN:5683,fork TCP:localhost:5684 >/dev/null 2>&1 & echo \$!")
     echo "SERVER_RELAY:$SERVER_RELAY_PID" >> "$PID_FILE"
-    log "Server relay started (PID: $SERVER_RELAY_PID)"
+    log "Server relay started (remote PID: $SERVER_RELAY_PID)"
     
     sleep 2
     
-    # Start local TCP→UDP relay
-    socat TCP4-LISTEN:5684,fork UDP:localhost:5683 &
+    # Start local TCP→UDP relay (suppress expected connection errors)
+    socat TCP4-LISTEN:5684,fork UDP:localhost:5683 2>/dev/null &
     LOCAL_RELAY_PID=$!
     echo "LOCAL_RELAY:$LOCAL_RELAY_PID" >> "$PID_FILE"
-    log "Local relay started (PID: $LOCAL_RELAY_PID)"
+    log "Local relay started (PID: $LOCAL_RELAY_PID) - Connection refused errors during CoAP server restarts are suppressed"
     
     sleep 2
     
@@ -129,10 +189,22 @@ cleanup_tunnel() {
         rm "$PID_FILE"
     fi
     
+    # Kill caffeinate process if it exists
+    if [ -n "$CAFFEINATE_PID" ] && kill -0 "$CAFFEINATE_PID" 2>/dev/null; then
+        kill "$CAFFEINATE_PID" 2>/dev/null
+        log "Stopped caffeinate process (PID: $CAFFEINATE_PID)"
+    fi
+    
     safe_port_cleanup 5683
     safe_port_cleanup 5684
     pkill -f "socat.*5683" 2>/dev/null
     pkill -f "socat.*5684" 2>/dev/null
+    
+    # Clean up any orphaned SSH tunnel processes
+    pkill -f "ssh.*pres.*5684" 2>/dev/null || true
+    
+    # Cancel any existing port forwards through SSH control master
+    ssh -O cancel -R 5684:localhost:5684 pres 2>/dev/null || true
     
     # Clean up remote socat processes
     ssh pres "sudo pkill -f 'socat.*5683'" 2>/dev/null || true
@@ -193,6 +265,5 @@ if start_tunnel; then
 else
     log "Initial tunnel setup failed"
     cleanup_tunnel
-    kill $CAFFEINATE_PID 2>/dev/null
     exit 1
 fi

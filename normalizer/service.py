@@ -13,9 +13,9 @@ from pydantic import ValidationError
 
 # Import shared helpers, models, and local components
 from shared.mq.kafka_helpers import (
-    create_kafka_consumer,
     create_kafka_producer,
-)  # Keep helpers for creation
+    AsyncResilientKafkaConsumer,
+)  # Use AsyncResilientKafkaConsumer instead of create_kafka_consumer
 from shared.models.common import (
     RawMessage,
     StandardizedOutput,
@@ -74,8 +74,9 @@ class NormalizerService:
         self.hardware_repository = hardware_repository
         self.alarm_repository = alarm_repository
         self.alert_repository = alert_repository
-        self.consumer: Optional[KafkaConsumer] = None
-        # Use the dedicated wrapper for producing messages
+        
+        # Use AsyncResilientKafkaConsumer instead of manual consumer management
+        self.resilient_consumer = None
         self.kafka_producer: Optional[NormalizerKafkaProducer] = None
 
         self.script_client = ScriptClient(
@@ -100,9 +101,7 @@ class NormalizerService:
             logger.warning("Alarm handler not initialized - alarm or alert repository not provided")
             
         self._running = False
-        self._stop_event = (
-            asyncio.Event()
-        )  # Use asyncio event if using async components
+        self._stop_event = asyncio.Event()
         
         # Debug data collection
         self.debug_data: List[Dict[str, Any]] = []
@@ -771,157 +770,69 @@ class NormalizerService:
             raise pub_err
 
     async def run(self):
-        """Main run loop: Connects to Kafka and processes messages."""
+        """Main run loop: Uses AsyncResilientKafkaConsumer for automatic error handling."""
         self._running = True
         logger.info("Starting Normalizer Service...")
 
-        while self._running:  # Outer loop for Kafka client resilience
-            raw_producer = None  # Define here for visibility in finally block
-            try:
-                logger.info("Initializing Kafka clients...")
-                self.consumer = create_kafka_consumer(
-                    config.KAFKA_RAW_DATA_TOPIC,
-                    config.KAFKA_CONSUMER_GROUP_ID,
-                    config.KAFKA_BOOTSTRAP_SERVERS,
-                    auto_offset_reset="earliest",
-                )
-                # Create the underlying producer instance
-                raw_producer = create_kafka_producer(config.KAFKA_BOOTSTRAP_SERVERS)
+        try:
+            # Initialize Kafka producer
+            raw_producer = create_kafka_producer(config.KAFKA_BOOTSTRAP_SERVERS)
+            self.kafka_producer = NormalizerKafkaProducer(raw_producer)
+            
+            # Set kafka producer on alarm handler if available
+            if self.alarm_handler:
+                self.alarm_handler.kafka_producer = self.kafka_producer
+                logger.debug("Kafka producer set on alarm handler")
 
-                # Check if clients were created successfully before wrapping
-                if not self.consumer or not raw_producer:
-                    raise RuntimeError(
-                        "Failed to initialize Kafka clients. Check logs."
-                    )
-
-                # Instantiate the producer wrapper
-                self.kafka_producer = NormalizerKafkaProducer(raw_producer)
-                
-                # Set kafka producer on alarm handler if available
-                if self.alarm_handler:
-                    self.alarm_handler.kafka_producer = self.kafka_producer
-                    logger.debug("Kafka producer set on alarm handler")
-
-                logger.info(
-                    f"Consumer group '{config.KAFKA_CONSUMER_GROUP_ID}' waiting for messages on topic '{config.KAFKA_RAW_DATA_TOPIC}'..."
-                )
-
-                while self._running:  # Inner loop for message polling
-                    msg_pack = self.consumer.poll(
-                        timeout_ms=config.KAFKA_CONSUMER_POLL_TIMEOUT_S * 1000
-                    )
-
-                    if not msg_pack:
-                        await asyncio.sleep(0.1)
-                        continue
-
-                    commit_needed = False
-                    for tp, messages in msg_pack.items():
-                        logger.debug(
-                            f"Received batch of {len(messages)} messages for {tp.topic} partition {tp.partition}"
-                        )
-                        for message in messages:
-                            if not self._running:
-                                break  # Check if stop was requested mid-batch
-
-                            # Process each message
-                            success = await self._process_message(message)
-
-                            if success:
-                                commit_needed = True  # Mark that we need to commit *after* the batch
-                            else:
-                                # Processing failed AND error publishing likely failed (or wasn't attempted)
-                                logger.error(
-                                    f"Processing failed for msg at offset {message.offset} (partition {tp.partition}). Not committing offset. Message will be redelivered."
-                                )
-                                commit_needed = False
-                                break  # Stop processing this partition's batch
-
-                        if not self._running or not commit_needed:
-                            break  # Exit batch loop if stop requested or commit not needed
-
-                    # Commit offsets ONLY if all messages in the polled batch were processed successfully
-                    # AND if the service is still running.
-                    if commit_needed and self._running:
-                        try:
-                            logger.debug("Committing Kafka offsets...")
-                            self.consumer.commit()  # Commit synchronously the offsets for all processed messages
-                            logger.debug("Offsets committed.")
-                        except KafkaError as commit_err:
-                            logger.error(
-                                f"Failed to commit Kafka offsets: {commit_err}. Messages since last commit may be reprocessed."
-                            )
-                            # Consider implications: stop service? Alert?
-
-                    # Check stop event after processing a batch/poll
-                    if self._stop_event.is_set():
-                        self._running = False
-                        logger.info("Stop event detected after processing batch.")
-                        break  # Exit inner polling loop
-
-            except KafkaError as ke:
-                logger.error(
-                    f"KafkaError encountered in main loop: {ke}. Attempting to reconnect/reinitialize in 10 seconds..."
-                )
-                # Close existing clients safely before retrying
-                self._safe_close_clients()
-                await asyncio.sleep(10)
-            except Exception as e:
-                logger.exception(f"Fatal error in Normalizer run loop: {e}")
-                self._running = False  # Stop the service on unexpected errors
-            finally:
-                # Ensure clients are closed if loop exits for any reason
-                # Check _running flag to avoid closing if we intend to retry connection
-                if not self._running:
-                    logger.info("Run loop ending, performing final client cleanup...")
-                    self._safe_close_clients()
-                # If raw_producer was created but wrapper wasn't, ensure it's closed
-                elif raw_producer and not self.kafka_producer:
-                    logger.warning(
-                        "Closing raw producer instance as wrapper was not initialized."
-                    )
-                    try:
-                        raw_producer.close()
-                    except Exception as e:
-                        logger.error(f"Error closing raw producer during recovery: {e}")
-
-        logger.info("Normalizer service run loop finished.")
-
-    def _safe_close_clients(self):
-        """Safely close Kafka consumer and producer wrapper, ignoring errors."""
-        if self.consumer:
-            try:
-                logger.info("Closing Kafka consumer...")
-                self.consumer.close()
-            except Exception as e:
-                logger.warning(f"Error closing Kafka consumer: {e}")
-            finally:
-                self.consumer = None
-
-        if self.kafka_producer:  # Check the wrapper instance
-            try:
-                logger.info("Closing Kafka producer wrapper...")
-                self.kafka_producer.close(timeout=10)  # Call wrapper's close
-            except Exception as e:
-                logger.warning(f"Error closing Kafka producer wrapper: {e}")
-            finally:
-                self.kafka_producer = None  # Clear the wrapper instance
-        else:
-            logger.debug(
-                "Kafka producer wrapper was already closed or not initialized."
+            # Create resilient consumer with automatic error handling
+            self.resilient_consumer = AsyncResilientKafkaConsumer(
+                topic=config.KAFKA_RAW_DATA_TOPIC,
+                group_id=config.KAFKA_CONSUMER_GROUP_ID,
+                bootstrap_servers=config.KAFKA_BOOTSTRAP_SERVERS,
+                auto_offset_reset="earliest",
+                on_error_callback=self._on_consumer_error
             )
+            
+            logger.info(f"Consumer group '{config.KAFKA_CONSUMER_GROUP_ID}' starting for topic '{config.KAFKA_RAW_DATA_TOPIC}'...")
+            
+            # This handles all the complexity: polling, error recovery, reconnection, etc.
+            await self.resilient_consumer.consume_messages(
+                message_handler=self._process_message,
+                commit_offset=True,
+                batch_processing=False  # Process messages individually
+            )
+            
+        except Exception as e:
+            logger.exception(f"Fatal error in Normalizer service: {e}")
+            self._running = False
+        finally:
+            # Clean up
+            if self.kafka_producer:
+                try:
+                    self.kafka_producer.close(timeout=10)
+                except Exception as e:
+                    logger.warning(f"Error closing Kafka producer: {e}")
+            
+            logger.info("Normalizer service stopped.")
+
+    async def _on_consumer_error(self, error, context):
+        """Handle consumer-level errors."""
+        logger.error(f"Consumer error: {error}")
+        # Could implement additional error handling logic here if needed
 
     async def stop(self):
         """Signals the service to stop gracefully."""
-        if self._stop_event.is_set():
+        if not self._running:
             logger.info("Stop already requested.")
             return
         logger.info("Stop requested for Normalizer Service.")
         
-        
         self._running = False
         self._stop_event.set()
-        # Closing clients is handled in the finally block of the run loop upon exit.
+        
+        # Stop the resilient consumer
+        if self.resilient_consumer:
+            await self.resilient_consumer.stop()
 
     async def _get_hardware_configuration(self, device_id: str, request_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """

@@ -24,7 +24,7 @@ class ProtobufDeviceIdExtractor:
         # Log available fields in the message for debugging - make this INFO so it's always visible
         if hasattr(parsed_message, 'DESCRIPTOR'):
             available_fields = [field.name for field in parsed_message.DESCRIPTOR.fields]
-            logger.info(f"Available fields in {message_type}: {available_fields}")
+            logger.debug(f"Available fields in {message_type}: {available_fields}")
         else:
             logger.info(f"Message type {message_type} has no DESCRIPTOR - available attributes: {dir(parsed_message)}")
 

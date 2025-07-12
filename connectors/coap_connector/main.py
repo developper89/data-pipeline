@@ -1,17 +1,18 @@
-# coap_gateway/main.py
-import asyncio
+#!/usr/bin/env python3
+# coap_connector/main.py
 import logging
+import asyncio
 import signal
 import sys
-from typing import Optional # For sys.exit
+import os
 
-# Shared helpers and local components
-from shared.mq.kafka_helpers import create_kafka_producer # For initialization
-import config
-from kafka_producer import KafkaMsgProducer # The wrapper
 from server import CoapGatewayServer
+from command_consumer import CommandConsumer
+from kafka_producer import KafkaMsgProducer
+from shared.mq.kafka_helpers import create_kafka_producer
+import config
 
-# Configure logging GLOBALLY for the entire connector
+# Configure logging
 log_level = getattr(logging, config.LOG_LEVEL.upper(), logging.DEBUG)
 logging.basicConfig(
     level=log_level,
@@ -21,108 +22,125 @@ logging.basicConfig(
     ]
 )
 
-# Set specific log levels for noisy third-party libraries
-logging.getLogger("aiocoap").setLevel(logging.INFO)  # aiocoap can be very verbose
+# Reduce kafka-python logging verbosity
 logging.getLogger("kafka").setLevel(logging.WARNING)
-logging.getLogger("docker").setLevel(logging.WARNING)
 
-# Ensure our application loggers inherit the global config
-logging.getLogger("resources").setLevel(log_level)
+# Set specific component log levels
 logging.getLogger("server").setLevel(log_level)
+logging.getLogger("command_consumer").setLevel(log_level)
 logging.getLogger("shared.translation").setLevel(log_level)
 
 logger = logging.getLogger(__name__)
 
-# Test logging configuration
-logger.info("🚀 CoAP Connector starting up...")
-logger.debug(f"🔧 Global logging configured: level={logging.getLevelName(log_level)}, format includes filename:lineno")
-logger.info(f"📊 Application loggers configured for level: {logging.getLevelName(log_level)}")
+class CoAPConnectorService:
+    """Main CoAP connector service that manages both server and command consumer."""
+    
+    def __init__(self):
+        self.coap_server = None
+        self.command_consumer = None
+        self.kafka_msg_producer = None
+        self.running = False
+        
+    async def start(self):
+        """Start the CoAP connector service."""
+        logger.info("Starting CoAP Connector Service...")
+        
+        try:
+            # Initialize Kafka producer
+            logger.info("Creating Kafka producer...")
+            self.kafka_msg_producer = KafkaMsgProducer(create_kafka_producer(config.KAFKA_BOOTSTRAP_SERVERS))
+            logger.info("Kafka producer created successfully")
+            
+            # Initialize CoAP server with required parameters
+            logger.info(f"Creating CoAP server on {config.COAP_HOST}:{config.COAP_PORT}")
+            self.coap_server = CoapGatewayServer(
+                host=config.COAP_HOST,
+                port=config.COAP_PORT,
+                kafka_producer=self.kafka_msg_producer
+            )
+            
+            # Initialize command consumer
+            self.command_consumer = CommandConsumer()
+            await self.command_consumer.start()
+            
+            self.running = True
+            logger.info("CoAP Connector Service started successfully")
+            
+            # Start both server and command consumer concurrently
+            await asyncio.gather(
+                self.coap_server.start(),
+                self.command_consumer.consume_commands()
+            )
+            
+        except Exception as e:
+            logger.exception(f"Error in CoAP Connector Service: {e}")
+            raise
+        finally:
+            await self.stop()
+    
+    async def stop(self):
+        """Stop the CoAP connector service."""
+        if not self.running:
+            return
+            
+        logger.info("Stopping CoAP Connector Service...")
+        self.running = False
+        
+        # Stop command consumer
+        if self.command_consumer:
+            try:
+                await self.command_consumer.stop()
+                logger.info("Command consumer stopped")
+            except Exception as e:
+                logger.error(f"Error stopping command consumer: {e}")
+        
+        # Stop CoAP server
+        if self.coap_server:
+            try:
+                await self.coap_server.stop()
+                logger.info("CoAP server stopped")
+            except Exception as e:
+                logger.error(f"Error stopping CoAP server: {e}")
+        
+        # Close Kafka producer
+        if self.kafka_msg_producer:
+            try:
+                self.kafka_msg_producer.close(timeout=5)
+                logger.info("Kafka producer closed")
+            except Exception as e:
+                logger.error(f"Error closing Kafka producer: {e}")
+        
+        logger.info("CoAP Connector Service stopped")
 
-# Global references for cleanup
-kafka_producer_wrapper: Optional[KafkaMsgProducer] = None
-server_instance: Optional[CoapGatewayServer] = None
+# Global service instance
+service_instance = None
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals."""
+    logger.info(f"Received signal {signum}")
+    if service_instance:
+        # Set a flag to stop the service gracefully
+        asyncio.create_task(service_instance.stop())
 
 async def main():
-    global kafka_producer_wrapper, server_instance
-    loop = asyncio.get_running_loop()
-    stop_event = asyncio.Event() # Used to signal shutdown completion
-
-    logger.info("Initializing CoAP Gateway...")
-
-    raw_kafka_producer = None # Keep track of the raw producer for potential cleanup
+    """Main entry point."""
+    global service_instance
+    
+    # Set up signal handlers
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Create and start service
+    service_instance = CoAPConnectorService()
+    
     try:
-        # 1. Initialize Kafka Producer (with retry logic inside helper)
-        logger.info(f"Connecting Kafka Producer to {config.KAFKA_BOOTSTRAP_SERVERS}...")
-        raw_kafka_producer = create_kafka_producer(config.KAFKA_BOOTSTRAP_SERVERS)
-        if not raw_kafka_producer:
-             raise RuntimeError("Failed to initialize Kafka Producer after retries.")
-        logger.info("Kafka Producer connected.")
-
-        # 2. Instantiate the Kafka Producer Wrapper
-        kafka_producer_wrapper = KafkaMsgProducer(raw_kafka_producer)
-
-        # 3. Initialize the CoAP server
-        server_instance = CoapGatewayServer(
-            host=config.COAP_HOST,
-            port=config.COAP_PORT,
-            kafka_producer=kafka_producer_wrapper # Pass the wrapper
-        )
-
-        # 4. Setup signal handlers for graceful shutdown
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(
-                sig, lambda s=sig: asyncio.create_task(shutdown(s, stop_event, server_instance, kafka_producer_wrapper))
-            )
-        logger.info("Signal handlers set up.")
-
-        # 5. Start the CoAP server (this blocks until stop is called or error)
-        await server_instance.start()
-
+        await service_instance.start()
+        logger.info("CoAP Connector completed successfully")
+    except KeyboardInterrupt:
+        logger.info("CoAP Connector interrupted by user")
     except Exception as e:
-         logger.exception(f"Fatal error during startup or runtime: {e}")
-         # Ensure cleanup happens even if startup fails partially
-         if not stop_event.is_set():
-              await shutdown(signal.SIGTERM, stop_event, server_instance, kafka_producer_wrapper)
-         sys.exit(1) # Exit with error
-    finally:
-        logger.info("CoAP Gateway main function exiting.")
-        # Cleanup should have been triggered by shutdown signal or exception handler
-
-
-async def shutdown(sig: signal.Signals, stop_event: asyncio.Event, server: Optional[CoapGatewayServer], kafka_prod: Optional[KafkaMsgProducer]):
-    """Cleanup tasks tied to the service's shutdown."""
-    if stop_event.is_set():
-        logger.info("Shutdown already in progress.")
-        return # Avoid duplicate shutdown actions
-
-    logger.warning(f"Received exit signal {sig.name}... Initiating graceful shutdown.")
-
-    # 1. Stop the CoAP server first (releases port, stops accepting new requests)
-    if server:
-        await server.stop()
-    else:
-        logger.warning("CoAP server instance not found during shutdown.")
-
-    # 2. Close the Kafka producer (flushes buffer)
-    if kafka_prod:
-        logger.info("Closing Kafka producer...")
-        try:
-            # Use the wrapper's close method
-            kafka_prod.close(timeout=10)
-        except Exception as e:
-             logger.error(f"Error closing Kafka producer wrapper: {e}", exc_info=True)
-    else:
-        logger.warning("Kafka producer wrapper not found during shutdown.")
-
-    # 3. Signal that shutdown is complete
-    stop_event.set()
-    logger.info("CoAP Gateway shutdown complete.")
-
+        logger.exception(f"Fatal error in CoAP Connector: {e}")
+        sys.exit(1)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("CoAP Gateway stopped by user (KeyboardInterrupt).")
-    # Ensure final log message after asyncio loop finishes
-    logger.info("CoAP Gateway process finished.")
+    asyncio.run(main())

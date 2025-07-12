@@ -9,10 +9,11 @@ import time
 from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 
-from shared.mq.kafka_helpers import create_kafka_consumer
+from shared.mq.kafka_helpers import AsyncResilientKafkaConsumer
 from shared.utils.script_client import ScriptClient
 from shared.config_loader import get_translator_configs
 from shared.translation.factory import TranslatorFactory
+from shared.models.common import CommandMessage
 import config
 
 logger = logging.getLogger(__name__)
@@ -27,10 +28,9 @@ class CommandConsumer:
         """
         Initialize the command consumer with parser support.
         """
-        self.consumer = None
+        self.resilient_consumer = None  # Use AsyncResilientKafkaConsumer
         self.running = False
         self._stop_event = asyncio.Event()
-        self._task = None
         
         # In-memory store for pending commands, indexed by device_id
         # In a production system, this would be a persistent store
@@ -52,11 +52,75 @@ class CommandConsumer:
             logger.warning("Command consumer already running")
             return
             
+        # Initialize resilient consumer
+        self.resilient_consumer = AsyncResilientKafkaConsumer(
+            topic=config.KAFKA_DEVICE_COMMANDS_TOPIC,
+            group_id=f"coap_command_consumer",
+            bootstrap_servers=config.KAFKA_BOOTSTRAP_SERVERS,
+            auto_offset_reset='latest',  # Only consume new messages
+            on_error_callback=self._on_consumer_error
+        )
+            
         self.running = True
         self._stop_event.clear()
-        self._task = asyncio.create_task(self._consume_loop())
         logger.info("Command consumer started")
         
+    async def consume_commands(self):
+        """Start consuming command messages using AsyncResilientKafkaConsumer."""
+        if not self.resilient_consumer:
+            logger.error("Cannot start consuming: AsyncResilientKafkaConsumer not initialized")
+            return
+            
+        try:
+            # This handles all the complexity: polling, error recovery, reconnection, etc.
+            await self.resilient_consumer.consume_messages(
+                message_handler=self._process_command_message,
+                commit_offset=True,
+                batch_processing=False  # Process commands individually
+            )
+        except Exception as e:
+            logger.exception(f"Fatal error in command consumer: {e}")
+            self.running = False
+
+    async def _process_command_message(self, message) -> bool:
+        """
+        Process a single command message.
+        
+        Args:
+            message: Kafka message object
+            
+        Returns:
+            True if processing was successful, False otherwise
+        """
+        try:
+            # Message value is already deserialized by KafkaConsumer
+            command_data = message.value
+            
+            # Parse message into CommandMessage model
+            try:
+                if isinstance(command_data, (bytes, str)):
+                    # If message is bytes/string, decode as JSON
+                    message_data = json.loads(command_data) if isinstance(command_data, str) else json.loads(command_data.decode('utf-8'))
+                else:
+                    # If message is already a dict
+                    message_data = command_data
+                
+                command_message = CommandMessage(**message_data)
+                success = await self._process_command(command_message)
+                return success
+            except Exception as e:
+                logger.error(f"Failed to parse command message: {e}")
+                return True  # Consider invalid message as processed (won't retry)
+                
+        except Exception as e:
+            logger.exception(f"Unexpected error processing command message: {e}")
+            return False  # Indicate failure - message will be retried
+            
+    async def _on_consumer_error(self, error, context):
+        """Handle consumer-level errors."""
+        logger.error(f"Consumer error: {error}")
+        # Could implement additional error handling logic here if needed
+
     async def stop(self):
         """Stop the command consumer."""
         if not self.running:
@@ -67,125 +131,60 @@ class CommandConsumer:
         self.running = False
         self._stop_event.set()
         
-        if self._task:
-            try:
-                await asyncio.wait_for(self._task, timeout=5.0)
-            except asyncio.TimeoutError:
-                logger.warning("Command consumer task did not finish promptly, cancelling")
-                self._task.cancel()
-                try:
-                    await self._task
-                except asyncio.CancelledError:
-                    pass
-            self._task = None
+        # Stop the resilient consumer
+        if self.resilient_consumer:
+            await self.resilient_consumer.stop()
             
-        await self._close_consumer()
         logger.info("Command consumer stopped")
-            
-    async def _consume_loop(self):
-        """Main loop for consuming command messages."""
-        retry_delay = 5  # Initial retry delay in seconds
-        max_retry_delay = 60  # Maximum retry delay in seconds
-        
-        while self.running:
-            try:
-                # Create the consumer if it doesn't exist
-                if not self.consumer:
-                    self.consumer = create_kafka_consumer(
-                        topic=config.KAFKA_DEVICE_COMMANDS_TOPIC,
-                        group_id=f"coap_command_consumer",
-                        bootstrap_servers=config.KAFKA_BOOTSTRAP_SERVERS,
-                        auto_offset_reset='latest'  # Only consume new messages
-                    )
-                    if not self.consumer:
-                        logger.error("Failed to create Kafka consumer, will retry...")
-                        await asyncio.sleep(retry_delay)
-                        retry_delay = min(retry_delay * 2, max_retry_delay)  # Exponential backoff
-                        continue
-                        
-                    retry_delay = 5  # Reset retry delay on successful connection
-                
-                # Poll for messages (non-blocking in asyncio context)
-                message_batch = self.consumer.poll(timeout_ms=1000)
-                
-                if not message_batch:
-                    # No messages, check if we should stop
-                    if self._stop_event.is_set():
-                        break
-                    await asyncio.sleep(0.1)
-                    continue
-                
-                # Process received messages
-                for tp, messages in message_batch.items():
-                    for message in messages:
-                        if self._stop_event.is_set():
-                            break
-                            
-                        await self._process_command(message.value)
-                
-                # Commit offsets
-                self.consumer.commit()
-                    
-            except KafkaError as e:
-                logger.error(f"Kafka error in command consumer: {e}")
-                await self._close_consumer()
-                await asyncio.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, max_retry_delay)
-            except Exception as e:
-                logger.exception(f"Unexpected error in command consumer: {e}")
-                await asyncio.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, max_retry_delay)
-                
-            # Check if we should stop
-            if self._stop_event.is_set():
-                break
     
-    async def _process_command(self, command_data: Dict[str, Any]):
+    async def _process_command(self, command_message: CommandMessage):
         """
         Process command using parser-based formatting.
 
         Args:
-            command_data: The command data from Kafka
+            command_message: The CommandMessage from Kafka
         """
         try:
             # Check if this is a CoAP command
-            if command_data.get('protocol', '').lower() != 'coap':
-                logger.debug(f"Ignoring non-CoAP command: {command_data.get('protocol')}")
-                return
+            if command_message.protocol.lower() != 'coap':
+                logger.debug(f"Ignoring non-CoAP command: {command_message.protocol}")
+                return True
 
             # Extract required fields
-            device_id = command_data.get('device_id')
-            request_id = command_data.get('request_id', 'unknown')
+            device_id = command_message.device_id
+            request_id = command_message.request_id
 
             if not device_id:
                 logger.error(f"[{request_id}] Invalid command message: missing device_id")
-                return
+                return True
 
             # Format command using parser-based approach
-            formatted_command = await self._format_command_with_parser(device_id, command_data)
+            formatted_command = await self._format_command_with_parser(device_id, command_message)
             if formatted_command:
                 # Store the formatted command
-                await self._store_formatted_command(device_id, command_data, formatted_command)
+                await self._store_formatted_command(device_id, command_message, formatted_command)
                 logger.info(f"[{request_id}] Formatted and stored command for device {device_id}")
-                return
+                return True
 
             # If we get here, we couldn't format the command
             logger.error(f"[{request_id}] Unable to format command for device {device_id}: parser script not found or formatting failed")
+            return True  # Consider this as processed (won't retry)
 
         except Exception as e:
             logger.exception(f"Error processing command: {e}")
+            return False  # Indicate failure - message will be retried
 
-    async def _store_formatted_command(self, device_id: str, command_data: Dict[str, Any], formatted_command: bytes):
+    async def _store_formatted_command(self, device_id: str, command_message: CommandMessage, formatted_command: bytes):
         """Store a command formatted by parser."""
         # Convert formatted binary command to hex string for storage
         hex_command = formatted_command.hex()
 
         # Update command data with formatted payload
-        enhanced_command = command_data.copy()
+        enhanced_command = command_message.model_dump()
         enhanced_command['payload'] = {
             'formatted_command': hex_command,
             'formatted_by': 'parser',
-            'original_payload': command_data.get('payload', {})
+            'original_payload': command_message.payload
         }
         enhanced_command['stored_at'] = time.time()
 
@@ -194,13 +193,13 @@ class CommandConsumer:
             self.pending_commands[device_id] = []
         self.pending_commands[device_id].append(enhanced_command)
 
-    async def _format_command_with_parser(self, device_id: str, command_data: dict) -> Optional[bytes]:
+    async def _format_command_with_parser(self, device_id: str, command_message: CommandMessage) -> Optional[bytes]:
         """
         Format command using device-specific parser.
         
         Args:
             device_id: Target device identifier
-            command_data: Command data dictionary from CommandMessage:
+            command_message: CommandMessage object containing:
                 - device_id: Target device identifier
                 - command_type: Type of command (e.g., "alarm", "config")
                 - payload: Command-specific data
@@ -212,7 +211,7 @@ class CommandConsumer:
         """
         try:
             # Get parser script path and manufacturer from command metadata
-            metadata = command_data.get('metadata', {})
+            metadata = command_message.metadata or {}
             parser_script_path = metadata.get('parser_script_path')
             if not parser_script_path:
                 logger.error(f"No parser script path provided in command metadata for device {device_id}")
@@ -234,16 +233,16 @@ class CommandConsumer:
                 return None
 
             # Get translator instance based on command type and manufacturer
-            command_type = command_data.get('command_type')
-            manufacturer = command_data.get('manufacturer')
+            command_type = command_message.command_type
             translator = await self._get_translator_for_device(device_id, command_type, manufacturer)
 
             # Use empty hardware configuration for now
             hardware_config = {}
 
-            # Format command using parser
+            # Format command using parser - convert CommandMessage to dict for parser
+            command_dict = command_message.model_dump()
             binary_command = script_module.format_command(
-                command=command_data,
+                command=command_dict,
                 translator=translator,
                 config=hardware_config
             )
@@ -331,20 +330,7 @@ class CommandConsumer:
                 return None
 
         return self._translator_cache[cache_key]
-
-
     
-    async def _close_consumer(self):
-        """Close the Kafka consumer if it exists."""
-        if self.consumer:
-            try:
-                self.consumer.close()
-                logger.info("Kafka command consumer closed")
-            except Exception as e:
-                logger.error(f"Error closing Kafka consumer: {e}")
-            finally:
-                self.consumer = None
-                
     def get_pending_commands(self, device_id: str) -> List[Dict[str, Any]]:
         """
         Get all pending commands for a device.

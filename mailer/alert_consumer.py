@@ -7,7 +7,7 @@ import time
 
 from kafka.errors import KafkaError
 
-from shared.mq.kafka_helpers import create_kafka_consumer, create_kafka_producer
+from shared.mq.kafka_helpers import AsyncResilientKafkaConsumer, create_kafka_producer
 from email_service import EmailService
 import config
 
@@ -20,11 +20,10 @@ class AlertConsumer:
     
     def __init__(self):
         """Initialize the alert consumer."""
-        self.consumer = None
+        self.resilient_consumer = None  # Use AsyncResilientKafkaConsumer
         self.error_producer = None
         self.running = False
         self._stop_event = asyncio.Event()
-        self._task = None
         
         # Initialize email service
         self.email_service = EmailService()
@@ -42,196 +41,131 @@ class AlertConsumer:
         """Start the alert consumer."""
         if self.running:
             logger.warning("Alert consumer already running")
-            return
+            return False
             
         # Test SMTP connection first
         if not self.email_service.test_smtp_connection():
             logger.error("SMTP connection test failed. Please check email configuration.")
             return False
             
+        # Initialize error producer
+        self.error_producer = create_kafka_producer(
+            bootstrap_servers=config.KAFKA_BOOTSTRAP_SERVERS
+        )
+            
+        # Initialize resilient consumer
+        self.resilient_consumer = AsyncResilientKafkaConsumer(
+            topic=config.KAFKA_ALERTS_TOPIC,
+            group_id=config.KAFKA_CONSUMER_GROUP_ID,
+            bootstrap_servers=config.KAFKA_BOOTSTRAP_SERVERS,
+            auto_offset_reset='latest',  # Only process new alerts
+            on_error_callback=self._on_consumer_error
+        )
+            
         self.running = True
-        self._stop_event.clear()
         self.stats['started_at'] = time.time()
-        self._task = asyncio.create_task(self._consume_loop())
+        
         logger.info("Alert consumer started")
         return True
         
-    async def stop(self):
-        """Stop the alert consumer."""
-        if not self.running:
-            logger.warning("Alert consumer not running")
+    async def consume_alerts(self):
+        """Start consuming alert messages using AsyncResilientKafkaConsumer."""
+        if not self.resilient_consumer:
+            logger.error("Cannot start consuming: AsyncResilientKafkaConsumer not initialized")
             return
             
-        logger.info("Stopping alert consumer...")
-        self.running = False
-        self._stop_event.set()
+        try:
+            # This handles all the complexity: polling, error recovery, reconnection, etc.
+            await self.resilient_consumer.consume_messages(
+                message_handler=self._process_alert,
+                commit_offset=True,
+                batch_processing=False  # Process alerts individually
+            )
+        except Exception as e:
+            logger.exception(f"Fatal error in alert consumer: {e}")
+            self.running = False
         
-        if self._task:
-            try:
-                await asyncio.wait_for(self._task, timeout=5.0)
-            except asyncio.TimeoutError:
-                logger.warning("Alert consumer task did not finish promptly, cancelling")
-                self._task.cancel()
-                try:
-                    await self._task
-                except asyncio.CancelledError:
-                    pass
-            self._task = None
-            
-        await self._close_consumer()
-        await self._close_error_producer()
-        logger.info("Alert consumer stopped")
-            
-    async def _consume_loop(self):
-        """Main loop for consuming alert messages."""
-        retry_delay = 5  # Initial retry delay in seconds
-        max_retry_delay = 60  # Maximum retry delay in seconds
-        
-        while self.running:
-            try:
-                # Create the consumer if it doesn't exist
-                if not self.consumer:
-                    self.consumer = create_kafka_consumer(
-                        topic=config.KAFKA_ALERTS_TOPIC,
-                        group_id=config.KAFKA_CONSUMER_GROUP_ID,
-                        bootstrap_servers=config.KAFKA_BOOTSTRAP_SERVERS,
-                        auto_offset_reset='latest'  # Only process new alerts
-                    )
-                    if not self.consumer:
-                        logger.error("Failed to create Kafka consumer for alerts, will retry...")
-                        await asyncio.sleep(retry_delay)
-                        retry_delay = min(retry_delay * 2, max_retry_delay)  # Exponential backoff
-                        continue
-                        
-                    retry_delay = 5  # Reset retry delay on successful connection
-                
-                # Create error producer if needed
-                if not self.error_producer:
-                    self.error_producer = create_kafka_producer(
-                        bootstrap_servers=config.KAFKA_BOOTSTRAP_SERVERS
-                    )
-                
-                # Poll for messages (non-blocking in asyncio context)
-                message_batch = self.consumer.poll(timeout_ms=1000)
-                
-                if not message_batch:
-                    # No messages, check if we should stop
-                    if self._stop_event.is_set():
-                        break
-                    await asyncio.sleep(0.1)
-                    continue
-                
-                # Process received messages
-                for tp, messages in message_batch.items():
-                    for message in messages:
-                        if self._stop_event.is_set():
-                            break
-                            
-                        await self._process_alert(message.value)
-                        self.stats['messages_processed'] += 1
-                
-                # Commit offsets
-                self.consumer.commit()
-                    
-            except KafkaError as e:
-                logger.error(f"Kafka error in alert consumer: {e}")
-                self.stats['errors'] += 1
-                await self._close_consumer()
-                await asyncio.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, max_retry_delay)
-            except Exception as e:
-                logger.exception(f"Unexpected error in alert consumer: {e}")
-                self.stats['errors'] += 1
-                await asyncio.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, max_retry_delay)
-                
-            # Check if we should stop
-            if self._stop_event.is_set():
-                break
-    
-    async def _process_alert(self, alert_data: Dict[str, Any]):
+    async def _process_alert(self, message) -> bool:
         """
-        Process an alert message from Kafka and send email notifications.
+        Process a single alert message.
         
         Args:
-            alert_data: The alert data from Kafka
+            message: Kafka message object
+            
+        Returns:
+            True if processing was successful, False otherwise
         """
         try:
-            alert_id = alert_data.get('id', 'unknown')
-            recipients = alert_data.get('recipients', [])
-            notify_creator = alert_data.get('notify_creator', False)
+            self.stats['messages_processed'] += 1
             
-            # Validate alert data
-            if not alert_id:
-                logger.error("Invalid alert message: missing id")
-                return
+            # Message value is already deserialized by KafkaConsumer
+            alert_data = message.value
             
-            if not recipients and not notify_creator:
-                logger.warning(f"[{alert_id}] No recipients specified for alert")
-                return
+            alert_id = alert_data.get('id', alert_data.get('alert_id', 'unknown'))
+            logger.info(f"Processing alert {alert_id}")
             
-            # Parse recipients if they're in string format (comma-separated)
-            if isinstance(recipients, str):
-                recipients = [email.strip() for email in recipients.split(',') if email.strip()]
+            # Validate required fields
+            required_fields = ['id', 'message', 'recipient_emails']
+            missing_fields = [field for field in required_fields if field not in alert_data or not alert_data[field]]
             
-            # Ensure recipients is a list
-            if not isinstance(recipients, list):
-                recipients = []
+            if missing_fields:
+                error_msg = f"Alert {alert_id} missing required fields: {missing_fields}"
+                logger.error(error_msg)
+                await self._send_error(alert_id, error_msg, alert_data)
+                self.stats['errors'] += 1
+                return True  # Consider invalid message as processed (won't retry)
             
-            # Add creator email if notify_creator is true
-            if notify_creator:
-                creator_email = alert_data.get('alarm_creator_email')
-                creator_name = alert_data.get('alarm_creator_full_name')
-                if creator_email and isinstance(creator_email, str):
-                    recipients.append(creator_email.strip())
-                    creator_info = f"{creator_name} ({creator_email})" if creator_name else creator_email
-                    logger.debug(f"[{alert_id}] Added creator {creator_info} to recipients")
-                else:
-                    logger.warning(f"[{alert_id}] notify_creator is true but creator email not found or invalid")
+            # Extract alert information
+            message_content = alert_data['message']
+            recipient_emails = alert_data['recipient_emails']
+            subject = alert_data.get('subject', f"Alert Notification - {alert_id}")
             
-            # Filter out invalid email addresses
-            valid_recipients = []
-            for email in recipients:
-                if isinstance(email, str) and '@' in email and '.' in email:
-                    valid_recipients.append(email.strip())
-                else:
-                    logger.warning(f"[{alert_id}] Invalid email address: {email}")
+            # Validate recipient emails
+            if not isinstance(recipient_emails, list) or not recipient_emails:
+                error_msg = f"Alert {alert_id} has invalid recipient_emails format"
+                logger.error(error_msg)
+                await self._send_error(alert_id, error_msg, alert_data)
+                self.stats['errors'] += 1
+                return True  # Consider invalid message as processed (won't retry)
             
-            # Remove duplicates while preserving order
-            seen = set()
-            unique_recipients = []
-            for email in valid_recipients:
-                if email not in seen:
-                    seen.add(email)
-                    unique_recipients.append(email)
-            
-            if not unique_recipients:
-                logger.warning(f"[{alert_id}] No valid email recipients found")
-                return
-            
-            logger.info(f"[{alert_id}] Processing alert for {len(unique_recipients)} recipients")
-            
-            # Send email with retry logic
-            success = self.email_service.send_alert_email_with_retry(alert_data, unique_recipients)
-            
-            if success:
-                self.stats['emails_sent'] += 1
-                logger.info(f"[{alert_id}] Successfully sent alert email to {len(unique_recipients)} recipients")
-            else:
-                self.stats['emails_failed'] += 1
-                logger.error(f"[{alert_id}] Failed to send alert email after all retry attempts")
+            # Send email notification
+            try:
+                success = await self.email_service.send_alert_notification(
+                    alert_id=alert_id,
+                    message=message_content,
+                    recipient_emails=recipient_emails,
+                    subject=subject,
+                    alert_data=alert_data
+                )
                 
-                # Send error to error topic
-                await self._send_error(alert_id, "Failed to send alert email", alert_data)
+                if success:
+                    logger.info(f"Successfully sent alert email for {alert_id} to {len(recipient_emails)} recipients")
+                    self.stats['emails_sent'] += 1
+                    return True
+                else:
+                    error_msg = f"Failed to send alert email for {alert_id}"
+                    logger.error(error_msg)
+                    await self._send_error(alert_id, error_msg, alert_data)
+                    self.stats['emails_failed'] += 1
+                    return False  # Indicate failure - message will be retried
+                    
+            except Exception as e:
+                error_msg = f"Exception while sending alert email for {alert_id}: {str(e)}"
+                logger.exception(error_msg)
+                await self._send_error(alert_id, error_msg, alert_data)
+                self.stats['emails_failed'] += 1
+                return False  # Indicate failure - message will be retried
                 
         except Exception as e:
-            logger.exception(f"Error processing alert: {e}")
+            logger.exception(f"Unexpected error processing alert message: {e}")
             self.stats['errors'] += 1
-            await self._send_error(
-                alert_data.get('id', 'unknown'), 
-                f"Error processing alert: {str(e)}", 
-                alert_data
-            )
+            return False  # Indicate failure - message will be retried
+    
+    async def _on_consumer_error(self, error, context):
+        """Handle consumer-level errors."""
+        logger.error(f"Consumer error: {error}")
+        self.stats['errors'] += 1
+        # Could implement additional error handling logic here if needed
     
     async def _send_error(self, alert_id: str, error_message: str, alert_data: Dict[str, Any]):
         """Send error message to error topic."""
@@ -257,19 +191,21 @@ class AlertConsumer:
         except Exception as e:
             logger.error(f"Failed to send error message to Kafka: {e}")
     
-    async def _close_consumer(self):
-        """Close the Kafka consumer if it exists."""
-        if self.consumer:
-            try:
-                self.consumer.close()
-                logger.info("Kafka alert consumer closed")
-            except Exception as e:
-                logger.error(f"Error closing Kafka consumer: {e}")
-            finally:
-                self.consumer = None
-    
-    async def _close_error_producer(self):
-        """Close the Kafka error producer if it exists."""
+    async def stop(self):
+        """Stop the alert consumer."""
+        if not self.running:
+            logger.warning("Alert consumer not running")
+            return
+            
+        logger.info("Stopping alert consumer...")
+        self.running = False
+        self._stop_event.set()
+        
+        # Stop the resilient consumer
+        if self.resilient_consumer:
+            await self.resilient_consumer.stop()
+        
+        # Close error producer
         if self.error_producer:
             try:
                 self.error_producer.close()
@@ -278,6 +214,8 @@ class AlertConsumer:
                 logger.error(f"Error closing Kafka error producer: {e}")
             finally:
                 self.error_producer = None
+                
+        logger.info("Alert consumer stopped")
                 
     def get_statistics(self) -> Dict[str, Any]:
         """Get consumer statistics."""

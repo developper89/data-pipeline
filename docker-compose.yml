@@ -16,8 +16,10 @@ services:
       - ./manager:/app/manager
       - ./shared:/app/shared
     environment:
-      - CONFIG_PATH=/app/manager/connectors_config.yaml
+      - CONFIG_PATH=/app/shared/connectors_config.yaml
       - HOST_SHARED_PATH=${PWD}/shared # Absolute path to shared directory on host
+      - HOST_STORAGE_PATH=${PWD}/storage # Absolute path to storage directory on host
+      - HOST_CONNECTORS_PATH=${PWD}/connectors # Absolute path to connectors directory on host
     networks:
       - preservarium_net
     depends_on:
@@ -86,20 +88,20 @@ services:
       - kafka
       - influxdb
 
-  cache_service:
-    container_name: cache_service
+  caching:
+    container_name: caching
     build:
       context: .
-      dockerfile: cache_service/Dockerfile
+      dockerfile: caching/Dockerfile
     volumes:
-      - ./cache_service:/app/cache_service
+      - ./caching:/app/caching
       - ./shared:/app/shared
     environment:
       # Kafka Configuration
       - KAFKA_BOOTSTRAP_SERVERS=kafka:9092
       - KAFKA_VALIDATED_DATA_TOPIC=iot_validated_data
       - KAFKA_ERROR_TOPIC=iot_errors
-      - KAFKA_CONSUMER_GROUP_ID=cache_service_group
+      - KAFKA_CONSUMER_GROUP_ID=caching_group
       - KAFKA_CONSUMER_POLL_TIMEOUT_S=1.0
       # Redis Configuration
       - REDIS_HOST=redis

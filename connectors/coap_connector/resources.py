@@ -116,34 +116,35 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
         self.request_count += 1
         request_id = f"REQ-{self.request_count:04d}"
         
-        # Basic test log to confirm render method is called
-        logger.info(f"🔄 Processing request {request_id}")
+        # Extract basic request info for logging
+        method = request.code.name if hasattr(request.code, 'name') else str(request.code)
+        source = request.remote.hostinfo if hasattr(request.remote, 'hostinfo') else str(request.remote)
+        payload_size = len(request.payload) if request.payload else 0
+        uri_path_list = list(request.opt.uri_path) if request.opt.uri_path else []
         
-        try:
-            # Extract request details
-            method = request.code.name if hasattr(request.code, 'name') else str(request.code)
-            source = request.remote.hostinfo if hasattr(request.remote, 'hostinfo') else str(request.remote)
-            payload_size = len(request.payload) if request.payload else 0
-            uri_path_list = list(request.opt.uri_path) if request.opt.uri_path else []
+        # Log only essential info at INFO level for performance
+        logger.info(f"[{request_id}] {method} from {source}, payload: {payload_size}B, path: {'/'.join(uri_path_list)}")
+        
+        # Detailed logging only at DEBUG level
+        if logger.isEnabledFor(logging.DEBUG):
             uri_path = "/".join(uri_path_list)
             full_uri = request.get_request_uri() if hasattr(request, 'get_request_uri') else "unknown"
-            
-            # Log comprehensive request details ALWAYS
-            logger.info("=" * 80)
-            logger.info(f"🔍 INCOMING CoAP REQUEST [{request_id}]")
-            logger.info(f"  Method: {method}")
-            logger.info(f"  Source: {source}")
-            logger.info(f"  Full URI: {full_uri}")
-            logger.info(f"  Path Components: {uri_path_list}")
-            logger.info(f"  Payload Size: {payload_size} bytes")
-            
+            logger.debug("=" * 80)
+            logger.debug(f"🔍 DETAILED REQUEST [{request_id}]")
+            logger.debug(f"  Method: {method}")
+            logger.debug(f"  Source: {source}")
+            logger.debug(f"  Full URI: {full_uri}")
+            logger.debug(f"  Path Components: {uri_path_list}")
+            logger.debug(f"  Payload Size: {payload_size} bytes")
+            logger.debug("=" * 80)
+        
+        try:
             # Handle .well-known/core discovery requests
             if len(uri_path_list) == 2 and uri_path_list[0] == ".well-known" and uri_path_list[1] == "core":
                 if method == "GET":
-                    logger.info(f"[{request_id}] 🔍 Handling CoAP resource discovery request")
+                    logger.info(f"[{request_id}] CoAP resource discovery")
                     well_known_response = self._generate_well_known_core_response()
-                    logger.info(f"[{request_id}] ✅ Returning resource discovery: {well_known_response}")
-                    logger.info("=" * 80)
+                    logger.debug(f"[{request_id}] Discovery response: {well_known_response}")
                     
                     return aiocoap.Message(
                         code=aiocoap.Code.CONTENT,
@@ -152,25 +153,21 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                     )
                 else:
                     logger.warning(f"[{request_id}] Method {method} not allowed for .well-known/core")
-                    logger.info("=" * 80)
                     return aiocoap.Message(code=aiocoap.Code.METHOD_NOT_ALLOWED)
             
-            # Log and analyze payload if present
+            # Process payload if present
             translation_result = None
             if payload_size > 0:
                 # Use translation manager to extract device ID
                 translation_result = self._extract_device_id_using_translation(request, request_id)
                 if translation_result and translation_result.success and translation_result.device_id:
-                    logger.info(f"  🏷️  EXTRACTED DEVICE ID: '{translation_result.device_id}' (translator: {translation_result.translator_used})")
+                    logger.info(f"[{request_id}] Device ID: {translation_result.device_id} ({translation_result.translator_used})")
                 elif translation_result and not translation_result.success:
-                    logger.warning(f"  ⚠️  Translation failed: {translation_result.error}")
-                
+                    logger.warning(f"[{request_id}] Translation failed: {translation_result.error}")
             else:
-                logger.warning(f"  ⚠️  Empty payload - no device ID to extract")
-                    
-            logger.info("=" * 80)
+                logger.debug(f"[{request_id}] Empty payload - no device ID to extract")
             
-            # Demo: Create RawMessage if device ID was extracted successfully
+            # Create RawMessage if device ID was extracted successfully
             if translation_result and translation_result.success and translation_result.device_id:
                 try:
                     # Create RawMessage with extracted device_id
@@ -182,57 +179,75 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                         metadata={
                             "source": source,
                             "method": method,
-                            "uri_path": uri_path,
+                            "uri_path": "/".join(uri_path_list),
                             "translator_used": translation_result.translator_used,
                             "request_id": request_id
                         }
                     )
                     
-                    logger.info(f"[{request_id}] ✅ Created RawMessage for device {translation_result.device_id}")
+                    logger.info(f"[{request_id}] RawMessage created for device {translation_result.device_id}")
                     
-                    # In a real implementation, you would send this to Kafka:
+                    # Publish to Kafka
                     self.kafka_producer.publish_raw_message(raw_message)
                     
                     # Check for pending commands after publishing the raw message
                     if self.command_consumer:
                         try:
                             formatted_command = await self.command_consumer.get_formatted_command(translation_result.device_id)
-                    
+                            
                             if formatted_command:
                                 # Get the command details for logging
                                 pending_commands = self.command_consumer.get_pending_commands(translation_result.device_id)
                                 command_id = pending_commands[0].get("request_id", "unknown") if pending_commands else "unknown"
                                 
-                                logger.info(f"[{request_id}] 📤 Sending formatted command {command_id} to device {translation_result.device_id} ({len(formatted_command)} bytes)")
+                                logger.info(f"[{request_id}] Sending command {command_id} to device {translation_result.device_id} ({len(formatted_command)}B)")
                                 
                                 # Acknowledge the command was sent (removes from pending)
                                 if pending_commands:
                                     success = self.command_consumer.acknowledge_command(translation_result.device_id, command_id)
                                     if success:
-                                        logger.info(f"[{request_id}] ✅ Command {command_id} acknowledged and removed from pending queue")
+                                        logger.info(f"[{request_id}] Command {command_id} acknowledged")
                                     else:
-                                        logger.warning(f"[{request_id}] ⚠️ Failed to acknowledge command {command_id}")
+                                        logger.warning(f"[{request_id}] Failed to acknowledge command {command_id}")
                                 
                                 # Send the formatted binary command in response
-                                success_code = aiocoap.Code.CHANGED if method == "PUT" else aiocoap.Code.CREATED
-                                return aiocoap.Message(code=success_code, payload=formatted_command)
-                        
+                                logger.debug(f"[{request_id}] Command payload: {formatted_command}")
+
+                                response = aiocoap.Message(mtype=aiocoap.ACK, code=aiocoap.Code.CREATED, token=request.token, payload=formatted_command)
+                                logger.info(" response: " + str(response) + " payload: " + str(response.payload.hex()))
+                                return response
                         except Exception as e:
-                            logger.error(f"[{request_id}] ❌ Error handling pending commands: {e}")
+                            logger.error(f"[{request_id}] Error handling pending commands: {e}")
                             # Continue with normal processing if command handling fails
-            
+                    logger.info(f"[{request_id}] Raw message published")
                     return aiocoap.Message(code=aiocoap.Code.CONTENT, payload=b"Raw message published")
                     
                 except Exception as e:
                     logger.error(f"[{request_id}] Failed to create RawMessage: {e}")
             
         except Exception as e:
-            logger.error(f"❌ Error processing request details for {request_id}: {e}", exc_info=True)
+            logger.error(f"[{request_id}] Error processing request: {e}", exc_info=True)
 
         # For requests that don't match well-known or have device data, return appropriate response
-        logger.warning(f"[{request_id}] Request doesn't match expected patterns. Bad Request.")
+        logger.warning(f"[{request_id}] Bad request - invalid endpoint or missing device data")
         return aiocoap.Message(code=aiocoap.Code.BAD_REQUEST, payload=b"Bad Request - Invalid endpoint or missing device data")
 
+    # def _add_time_to_command(self, command_payload: bytes) -> bytes:
+    #     """Add current time to command payload if it's a ProtoConfig."""
+    #     try:
+    #         from your_proto_module import ProtoConfig
+            
+    #         # Try to parse as ProtoConfig and add time
+    #         config = ProtoConfig()
+    #         config.ParseFromString(command_payload)
+    #         config.current_time = int(time.time())
+            
+    #         return config.SerializeToString()
+    #     except Exception:
+    #         # If parsing fails, return original payload
+    #         logger.warning("Could not add time to command payload")
+    #         return command_payload
+        
     def _extract_device_id_using_translation(self, request, request_id: str) -> TranslationResult:
         """Extract device ID using the translation layer."""
         try:
@@ -255,12 +270,11 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
             result = self.translation_manager.extract_device_id(raw_data)
             
             if result.success:
-                logger.info(f"[{request_id}] Translation successful using {result.translator_used}")
+                logger.debug(f"[{request_id}] Translation successful using {result.translator_used}")
                 if hasattr(result, 'parsed_data') and result.parsed_data:
                     logger.debug(f"[{request_id}] Parsed data: {result.parsed_data}")
             else:
-                logger.warning(f"[{request_id}] Translation failed: {result.error}")
-
+                logger.debug(f"[{request_id}] Translation failed: {result.error}")
                     
             return result
             

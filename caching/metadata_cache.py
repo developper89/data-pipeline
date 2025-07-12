@@ -28,17 +28,14 @@ class MetadataCache:
         self.redis_repository = redis_repository
         self.config = redis_repository.config
     
-    async def cache_reading(self, device_id: str, reading_data: ValidatedOutput, 
-                           category: str, ttl: Optional[int] = None) -> bool:
+    async def cache_reading(self, reading_data: ValidatedOutput, ttl: Optional[int] = None) -> bool:
         """
         Cache a single reading for a device grouped by category and index. Only the latest record 
         for each category+index combination is stored, replacing any previous record with the same 
         category+index.
         
         Args:
-            device_id: The device ID
             reading_data: ValidatedOutput object containing reading data and metadata
-            category: The category from the datatype (e.g., "P", "M", "C", "S")
             ttl: Time-to-live in seconds (optional)
         
         Returns:
@@ -48,11 +45,14 @@ class MetadataCache:
             # Extract request_id and index from reading data
             request_id = reading_data.request_id
             index = reading_data.index
+            device_id = reading_data.device_id
+            
+            category = reading_data.metadata.get("datatype_category", None)
             
             if not category:
                 logger.warning(f"Reading data for device {device_id} has no category")
                 return False
-                
+            
             if not index:
                 logger.warning(f"Reading data for device {device_id}, category {category} has no index")
                 return False
@@ -70,7 +70,7 @@ class MetadataCache:
                 "category": category,
             }
             
-            logger.info(f"Caching latest reading for device {device_id}, category {category}, index {index}: values={reading_data.values}")
+            logger.debug(f"Caching latest reading for device {device_id}, category {category}, index {index}: values={reading_data.values}")
             
             # Use Redis hash to store latest reading for each category+index combination
             # Key structure: device:{device_id}:category:{category}:readings

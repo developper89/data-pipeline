@@ -3,7 +3,7 @@ import logging
 from typing import Dict, Any, Optional
 from .base import BaseTranslator
 from .protobuf.translator import ProtobufTranslator
-from .pattern.translator import PatternTranslator
+from .proprietary.translator import ProprietaryTranslator
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +28,8 @@ class TranslatorFactory:
         
         if translator_type == 'protobuf':
             return ProtobufTranslator(config)
-        elif translator_type == 'pattern':
-            return PatternTranslator(config)
+        elif translator_type == 'proprietary':
+            return ProprietaryTranslator(config)
         else:
             logger.error(f"Unknown translator type: {translator_type}")
             return None

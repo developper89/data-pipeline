@@ -1,9 +1,11 @@
 from typing import Optional, Dict, Any
 import logging
+import os
 from shared.translation.base import BaseTranslator
 from shared.models.translation import RawData, TranslationResult
 from .message_parser import ProtobufMessageParser
 from .device_id_extractor import ProtobufDeviceIdExtractor
+from shared.utils.script_client import ScriptClient, ScriptNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +25,84 @@ class ProtobufTranslator(BaseTranslator):
         self.device_id_extractor = ProtobufDeviceIdExtractor(
             config.get('device_id_extraction', {})
         )
+        
+        # Initialize script client for parser script loading
+        self.script_client = ScriptClient(
+            storage_type="local",
+            local_dir="/app/storage/parser_scripts"  # Default parser scripts directory
+        )
+        
+        # Cache for loaded script module
+        self._script_module = None
+
+    @property
+    def parser_script_path(self) -> Optional[str]:
+        """Get the parser script path from configuration."""
+        return self.config.get('parser_script_path')
+
+    @property
+    def script_module(self):
+        """Get the loaded parser script module (lazy loading)."""
+        if self._script_module is None:
+            self._script_module = self._load_script_module()
+        return self._script_module
+
+    def _load_script_module(self):
+        """Load the parser script module from the configured path."""
+        if not self.parser_script_path:
+            logger.warning(f"No parser script path configured for {self.manufacturer} translator")
+            return None
+            
+        try:
+            # Build full script path
+            script_path = os.path.join(self.script_client.local_dir, self.parser_script_path)
+            
+            # Use async wrapper for sync loading
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're in an async context, but get_module is async
+                # For now, we'll handle this synchronously but this could be improved
+                logger.warning("Loading script module synchronously from async context")
+                return None
+            else:
+                # We're in a sync context, can use asyncio.run
+                script_module = asyncio.run(self.script_client.get_module(script_path))
+                logger.info(f"Successfully loaded parser script module '{self.parser_script_path}' for {self.manufacturer} translator")
+                return script_module
+                
+        except ScriptNotFoundError as e:
+            logger.error(f"Parser script not found for {self.manufacturer} translator: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error loading parser script for {self.manufacturer} translator: {e}")
+            return None
+
+    async def load_script_module_async(self):
+        """Async method to load the parser script module."""
+        if not self.parser_script_path:
+            logger.warning(f"No parser script path configured for {self.manufacturer} translator")
+            return None
+            
+        try:
+            # Build full script path
+            script_path = os.path.join(self.script_client.local_dir, self.parser_script_path)
+            
+            # Load the script module
+            self._script_module = await self.script_client.get_module(script_path)
+            logger.info(f"Successfully loaded parser script module '{self.parser_script_path}' for {self.manufacturer} translator")
+            return self._script_module
+            
+        except ScriptNotFoundError as e:
+            logger.error(f"Parser script not found for {self.manufacturer} translator: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error loading parser script for {self.manufacturer} translator: {e}")
+            return None
+
+    def has_script_module(self) -> bool:
+        """Check if translator has a valid script module."""
+        return self.script_module is not None
 
     def can_handle(self, raw_data: RawData) -> bool:
         """Check if this translator can handle the protobuf data."""

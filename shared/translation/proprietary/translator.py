@@ -7,17 +7,19 @@ selection and validation.
 """
 
 import logging
+import os
 from typing import Dict, List, Optional
 
 from ..base import BaseTranslator
 from ...models.translation import RawData, TranslationResult
 from .extractors.path_pattern_extractor import PathPatternExtractor
 from .extractors.json_payload_extractor import JsonPayloadExtractor
+from shared.utils.script_client import ScriptClient, ScriptNotFoundError
 
 logger = logging.getLogger(__name__)
 
 
-class PatternTranslator(BaseTranslator):
+class ProprietaryTranslator(BaseTranslator):
     """
     Protocol-agnostic pattern-based device ID translator.
     
@@ -33,14 +35,94 @@ class PatternTranslator(BaseTranslator):
         Args:
             config: Configuration dictionary containing device_id_extraction sources
         """
+        self.config = config
         self.sources = config.get('device_id_extraction', {}).get('sources', [])
+        self.manufacturer = config.get('manufacturer', 'unknown')
         
         # Sort sources by priority (lower number = higher priority)
         self.sources.sort(key=lambda x: x.get('priority', 999))
         
-        logger.info(f"Initialized PatternTranslator with {len(self.sources)} extraction sources")
+        logger.info(f"Initialized ProprietaryTranslator with {len(self.sources)} extraction sources")
         for i, source in enumerate(self.sources):
             logger.debug(f"Source {i+1}: type={source.get('type')}, priority={source.get('priority', 999)}")
+            
+        # Initialize script client for parser script loading
+        self.script_client = ScriptClient(
+            storage_type="local",
+            local_dir="/app/storage/parser_scripts"  # Default parser scripts directory
+        )
+        
+        # Cache for loaded script module
+        self._script_module = None
+
+    @property
+    def parser_script_path(self) -> Optional[str]:
+        """Get the parser script path from configuration."""
+        return self.config.get('parser_script_path')
+
+    @property
+    def script_module(self):
+        """Get the loaded parser script module (lazy loading)."""
+        if self._script_module is None:
+            self._script_module = self._load_script_module()
+        return self._script_module
+
+    def _load_script_module(self):
+        """Load the parser script module from the configured path."""
+        if not self.parser_script_path:
+            logger.warning(f"No parser script path configured for proprietary translator")
+            return None
+            
+        try:
+            # Build full script path
+            script_path = os.path.join(self.script_client.local_dir, self.parser_script_path)
+            
+            # Use async wrapper for sync loading
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're in an async context, but get_module is async
+                # For now, we'll handle this synchronously but this could be improved
+                logger.warning("Loading script module synchronously from async context")
+                return None
+            else:
+                # We're in a sync context, can use asyncio.run
+                script_module = asyncio.run(self.script_client.get_module(script_path))
+                logger.info(f"Successfully loaded parser script module '{self.parser_script_path}' for proprietary translator")
+                return script_module
+                
+        except ScriptNotFoundError as e:
+            logger.error(f"Parser script not found for proprietary translator: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error loading parser script for proprietary translator: {e}")
+            return None
+
+    async def load_script_module_async(self):
+        """Async method to load the parser script module."""
+        if not self.parser_script_path:
+            logger.warning(f"No parser script path configured for proprietary translator")
+            return None
+            
+        try:
+            # Build full script path
+            script_path = os.path.join(self.script_client.local_dir, self.parser_script_path)
+            
+            # Load the script module
+            self._script_module = await self.script_client.get_module(script_path)
+            logger.info(f"Successfully loaded parser script module '{self.parser_script_path}' for proprietary translator")
+            return self._script_module
+            
+        except ScriptNotFoundError as e:
+            logger.error(f"Parser script not found for proprietary translator: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error loading parser script for proprietary translator: {e}")
+            return None
+
+    def has_script_module(self) -> bool:
+        """Check if translator has a valid script module."""
+        return self.script_module is not None
     
     def can_handle(self, raw_data: RawData) -> bool:
         """
@@ -65,13 +147,13 @@ class PatternTranslator(BaseTranslator):
         can_handle_json = has_json_sources and has_payload_data
         
         result = can_handle_path or can_handle_json
-        logger.debug(f"PatternTranslator can_handle: {result} (path: {can_handle_path}, json: {can_handle_json})")
+        logger.debug(f"ProprietaryTranslator can_handle: {result} (path: {can_handle_path}, json: {can_handle_json})")
         
         return result
     
     def extract_device_id(self, raw_data: RawData) -> TranslationResult:
         """
-        Extract device ID from raw data using configured pattern sources.
+        Extract device ID from raw data using configured proprietary sources.
         
         Args:
             raw_data: Raw data containing path and payload information
@@ -116,10 +198,11 @@ class PatternTranslator(BaseTranslator):
                     if self._validate_device_id(device_id, source):
                         logger.info(f"Successfully extracted device ID '{device_id}' using source {i+1} ({source_type})")
                         return TranslationResult(
-                            device_id=device_id,
                             success=True,
+                            device_id=device_id,
+                            translator_used=f"proprietary_{self.manufacturer}",
+                            translator_type="proprietary",
                             raw_data=raw_data,
-                            translator_type="pattern",
                             metadata={
                                 'sources_count': len(self.sources),
                                 'extraction_successful': device_id is not None,
@@ -139,7 +222,7 @@ class PatternTranslator(BaseTranslator):
             success=False,
             error="No device ID could be extracted from any configured source",
             raw_data=raw_data,
-            translator_type="pattern",
+            translator_type="proprietary",
             metadata={
                 'sources_count': len(self.sources),
                 'extraction_successful': False

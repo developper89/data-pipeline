@@ -10,7 +10,7 @@ import os
 import time
 import json
 from shared.models.common import RawMessage
-from shared.models.translation import RawData
+from shared.models.translation import RawData, TranslationResult
 from shared.translation.manager import TranslationManager
 from shared.translation.factory import TranslatorFactory
 from shared.config_loader import get_translator_configs
@@ -89,7 +89,7 @@ class MQTTClientWrapper:
             logger.error(f"Failed to initialize translation manager: {e}")
             return TranslationManager([])
 
-    def _extract_device_id_using_translation(self, topic: str, payload_bytes: bytes) -> str:
+    def _extract_device_id_using_translation(self, topic: str, payload_bytes: bytes) -> TranslationResult:
         """Extract device ID using the translation layer."""
         try:
             # Create RawData for translation
@@ -109,7 +109,7 @@ class MQTTClientWrapper:
             
             if result.success and result.device_id:
                 logger.debug(f"Successfully extracted device ID '{result.device_id}' from topic '{topic}'")
-                return result.device_id
+                return result
             else:
                 logger.warning(f"Failed to extract device ID from topic '{topic}': {result.error}")
                 # Fallback to using the entire topic as device ID
@@ -334,7 +334,7 @@ class MQTTClientWrapper:
     def on_message(self, client, userdata, msg):
         try:
             # Use translation layer to extract device ID
-            device_id = self._extract_device_id_using_translation(msg.topic, msg.payload)
+            result = self._extract_device_id_using_translation(msg.topic, msg.payload)
             
             payload_bytes = msg.payload
             
@@ -343,20 +343,21 @@ class MQTTClientWrapper:
             
             # Create RawMessage - with payload as string
             raw_message = RawMessage(
-                device_id=device_id,
+                device_id=result.device_id,
                 payload_hex=payload_str,  # Updated field name from payload to payload_hex
                 protocol="mqtt",
                 metadata={
                     "mqtt_topic": msg.topic,
                     "mqtt_qos": msg.qos,
                     "mqtt_retain": msg.retain,
+                    "translator_used": result.translator_used,
                 }
             )
             
             # Log specific device for debugging
-            if device_id == "2207001":
+            if result.device_id == "2207001":
                 logger.info(f"Received message on topic '{msg.topic}' (QoS {msg.qos})")
-                logger.info(f"Extracted device_id: {device_id}")
+                logger.info(f"Extracted device_id: {result.device_id}")
                 logger.info(f"payload_hex is: {raw_message.payload_hex}")
             
             # Publish to Kafka - schedule the async call in the main event loop

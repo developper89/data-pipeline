@@ -1,0 +1,198 @@
+{
+    "measurementPeriodBase": 60,
+    "transmissionInterval": 120,
+    "bleTurnoffTime": 4294967295,
+    "ackInterval": 4294967295,
+    "transferLimit": 65535,
+    "transferLimitTimer": 65535,
+    "dataServerIp": "185.98.138.142",
+    "dataServerPort": 5683,
+    "updateServerIp": "18.184.24.239",
+    "updateServerPortUdp": 50000,
+    "updateServerPortCoap": 5680,
+    "apn": "\u007f",
+    "plmnSelection": 1000000,
+    "hash": 22,
+    "cloudTokenConfig": 255,
+    "serialNumber": "KCwCQk7t",
+    "measurementPeriodFactor": 1,
+    "channelTypes": [
+        "MEASUREMENT_TYPE_TEMPERATURE",
+        "MEASUREMENT_TYPE_HUMIDITY",
+        "MEASUREMENT_TYPE_NO_SENSOR",
+        "MEASUREMENT_TYPE_NO_SENSOR",
+        "MEASUREMENT_TYPE_NO_SENSOR",
+        "MEASUREMENT_TYPE_NO_SENSOR"
+    ],
+    "rules": [
+        {
+            "condition": "CONDITION_DISABLED",
+            "channelMask": 0,
+            "parameters": [],
+            "action": "ACTION_UNSPECIFIED"
+        },
+        {
+            "condition": "CONDITION_DISABLED",
+            "channelMask": 0,
+            "parameters": [],
+            "action": "ACTION_UNSPECIFIED"
+        },
+        {
+            "condition": "CONDITION_DISABLED",
+            "channelMask": 0,
+            "parameters": [],
+            "action": "ACTION_UNSPECIFIED"
+        },
+        {
+            "condition": "CONDITION_DISABLED",
+            "channelMask": 0,
+            "parameters": [],
+            "action": "ACTION_UNSPECIFIED"
+        },
+        {
+            "condition": "CONDITION_DISABLED",
+            "channelMask": 0,
+            "parameters": [],
+            "action": "ACTION_UNSPECIFIED"
+        },
+        {
+            "condition": "CONDITION_DISABLED",
+            "channelMask": 0,
+            "parameters": [],
+            "action": "ACTION_UNSPECIFIED"
+        },
+        {
+            "condition": "CONDITION_DISABLED",
+            "channelMask": 0,
+            "parameters": [],
+            "action": "ACTION_UNSPECIFIED"
+        },
+        {
+            "condition": "CONDITION_DISABLED",
+            "channelMask": 0,
+            "parameters": [],
+            "action": "ACTION_UNSPECIFIED"
+        },
+        {
+            "condition": "CONDITION_DISABLED",
+            "channelMask": 0,
+            "parameters": [],
+            "action": "ACTION_UNSPECIFIED"
+        },
+        {
+            "condition": "CONDITION_DISABLED",
+            "channelMask": 0,
+            "parameters": [],
+            "action": "ACTION_UNSPECIFIED"
+        },
+        {
+            "condition": "CONDITION_DISABLED",
+            "channelMask": 0,
+            "parameters": [],
+            "action": "ACTION_UNSPECIFIED"
+        },
+        {
+            "condition": "CONDITION_DISABLED",
+            "channelMask": 0,
+            "parameters": [],
+            "action": "ACTION_UNSPECIFIED"
+        }
+    ],
+    "supervisionPeriod": 7200,
+    "modemBandsMask": 65535,
+    "dataEndpoint": "m",
+    "configurationEndpoint": "c",
+    "deviceInfoEndpoint": "i",
+    "timeEndpoint": "t",
+    "bleTxPowerLevel": 1,
+    "hashTimestamp": 1752272108,
+    "cloudTokenCoapOption": 65000,
+    "payloadSignatureCoapOption": 65000,
+    "dnsServerIp": [
+        255,
+        255,
+        255,
+        255
+    ],
+    "dnsTtlConfig": 864002,
+    "payloadSplitInfo": 1,
+    "cellularConfigParams": [
+        8,
+        2,
+        1,
+        1,
+        2,
+        2,
+        11,
+        1,
+        11,
+        65535,
+        65535,
+        65535
+    ],
+    "calendars": [
+        {
+            "type": "CALENDAR_TYPE_DISABLED",
+            "ruleMask": 0,
+            "parameters": []
+        },
+        {
+            "type": "CALENDAR_TYPE_DISABLED",
+            "ruleMask": 0,
+            "parameters": []
+        },
+        {
+            "type": "CALENDAR_TYPE_DISABLED",
+            "ruleMask": 0,
+            "parameters": []
+        },
+        {
+            "type": "CALENDAR_TYPE_DISABLED",
+            "ruleMask": 0,
+            "parameters": []
+        },
+        {
+            "type": "CALENDAR_TYPE_DISABLED",
+            "ruleMask": 0,
+            "parameters": []
+        },
+        {
+            "type": "CALENDAR_TYPE_DISABLED",
+            "ruleMask": 0,
+            "parameters": []
+        }
+    ],
+    "ledConfig": [
+        3,
+        18,
+        255,
+        255,
+        20,
+        20,
+        20,
+        20,
+        8
+    ],
+    "networkTroubleshooting": 1,
+    "encryptionKey": "fw==",
+    "apnUserName": "\u007f",
+    "apnPassword": "\u007f",
+    "bleAdvertisingPeriod": {
+        "mode": "BLE_ADVERTISING_PERIOD_MODE_DEFAULT",
+        "normal": 1636,
+        "fast": 818
+    },
+    "requestDeviceInfo": false,
+    "requestFwUpdate": false,
+    "currentTime": 0,
+    "disableModemRequest": 0,
+    "requestConfiguration": false,
+    "errors": [],
+    "acceptWithoutTesting": false,
+    "cloudToken": "",
+    "memoryResetRequest": false,
+    "requestRuntimeErrorsClear": false,
+    "errorTimestamp": 0,
+    "modemUpdateRequest": "",
+    "outputControlStateRequest": []
+}

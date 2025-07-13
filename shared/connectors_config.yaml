@@ -5,6 +5,7 @@ connectors:
       - type: "protobuf"
         config:
           manufacturer: "efento"
+          parser_script_path: "c1d71d91c08e409ebceec1ea54023d9b.py"
           path_mapping:
             "i": "device_info"
             "m": "measurements"
@@ -68,8 +69,10 @@ connectors:
   - connector_id: "mqtt-connector"
     image: "mqtt-connector:latest"
     translators:
-      - type: "pattern"
+      - type: "proprietary"
         config:
+          manufacturer: "mafabrique"
+          parser_script_path: "681562fd385445ce9d842e1ad824f589.py"
           device_id_extraction:
             sources:
               # Handle 3-level topic structure: broker_data/{building_id}/{device_id}/data
@@ -99,15 +102,15 @@ connectors:
             sources:
               - command_type: "alarm"
                 format_type: "json"
-                topic_pattern: "broker_data/{building_id}/{device_id}/commands"
+                topic_pattern: "broker_data/+/{device_id}/commands"
                 priority: 1
               - command_type: "config"
                 format_type: "json"
-                topic_pattern: "broker_data/{building_id}/{device_id}/config"
+                topic_pattern: "broker_data/+/{device_id}/config"
                 priority: 1
               - command_type: "reboot"
                 format_type: "simple"
-                topic_pattern: "broker_data/{building_id}/{device_id}/control"
+                topic_pattern: "broker_data/+/{device_id}/control"
                 priority: 1
             validation:
               supported_commands: ["alarm", "config", "reboot"]

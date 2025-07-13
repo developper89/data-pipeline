@@ -23,9 +23,6 @@ from shared.models.common import (
     ErrorMessage,
     generate_request_id,
 )
-from preservarium_sdk.infrastructure.sql_repository.sql_parser_repository import (
-    SQLParserRepository,
-)
 from preservarium_sdk.infrastructure.sql_repository.sql_datatype_repository import (
     SQLDatatypeRepository,
 )
@@ -61,14 +58,12 @@ logger.setLevel(config.LOG_LEVEL)
 class NormalizerService:
     def __init__(
         self, 
-        parser_repository: SQLParserRepository,
         datatype_repository: Optional[SQLDatatypeRepository] = None,
         sensor_repository: Optional[SQLSensorRepository] = None,
         hardware_repository: Optional[SQLHardwareRepository] = None,
         alarm_repository: Optional[SQLAlarmRepository] = None,
         alert_repository: Optional[SQLAlertRepository] = None
     ):
-        self.parser_repository = parser_repository
         self.datatype_repository = datatype_repository
         self.sensor_repository = sensor_repository
         self.hardware_repository = hardware_repository
@@ -144,11 +139,6 @@ class NormalizerService:
                     return True
                 
                 
-                # Get the hardware configuration for the sensor
-                hardware_config = await self._get_hardware_configuration(raw_message.device_id, request_id)
-                
-                
-                
                 # if raw_message.device_id == "2207001":
                 #     logger.info(f"raw message device_id : {raw_message.device_id}, payload_hex: {raw_message.payload_hex}")
                 request_id = raw_message.request_id
@@ -184,24 +174,37 @@ class NormalizerService:
                 )
                 return True  # Indicate error was handled by publishing
 
-            # 2. Fetch Device Configuration
+            # 2. Get Script Module from Translator
             try:
-                parser = await self.parser_repository.get_parser_for_sensor(
-                    raw_message.device_id
-                )
-                if parser is None:
-                    # logger.debug(f"[{request_id}] No config found for {raw_message.device_id}")
+                # Initialize translator based on translator_used metadata
+                translator_instance = await self._initialize_translator(raw_message, request_id)
+                
+                if not translator_instance:
+                    logger.debug(f"[{request_id}] No translator available for device {raw_message.device_id}")
                     return True  # Indicate error was handled
-                logger.info(
-                    f"[{request_id}] Found config for {raw_message.device_id}: script={parser.file_path}"
-                )
+                
+                # Load script module from translator if available
+                script_module = None
+                if hasattr(translator_instance, 'script_module') and translator_instance.script_module:
+                    script_module = translator_instance.script_module
+                elif hasattr(translator_instance, 'parser_script_path') and translator_instance.parser_script_path:
+                    # Try to load the script module if it's not already loaded
+                    try:
+                        await translator_instance.load_script_module_async()
+                        script_module = translator_instance.script_module
+                    except Exception as e:
+                        logger.error(f"[{request_id}] Failed to load script module for translator: {e}")
+                
+                if not script_module:
+                    logger.debug(f"[{request_id}] No script module available for device {raw_message.device_id}")
+                    return True  # Indicate error was handled
+                    
+                logger.info(f"[{request_id}] Successfully loaded script module for device {raw_message.device_id}")
 
-            except Exception as e:  # Catch DB errors
-                logger.exception(
-                    f"[{request_id}] Database error fetching config for {raw_message.device_id}: {e}"
-                )
+            except Exception as e:  # Catch configuration errors
+                logger.exception(f"[{request_id}] Error getting script module for {raw_message.device_id}: {e}")
                 await self._publish_processing_error(
-                    "Database Error",
+                    "Script Module Error",
                     error=str(e),
                     original_message=job_dict,
                     request_id=request_id,
@@ -210,43 +213,10 @@ class NormalizerService:
                 error_published = True
                 return True  # Assume non-retryable for now
 
-            # 3. Fetch Parser Script Content
-            try:
-                filename = os.path.basename(parser.file_path)
-                script_ref = os.path.join(self.script_client.local_dir, filename)
-                script_module = await self.script_client.get_module(script_ref)
-                logger.debug(f"[{request_id}] Loaded script for ref: {script_ref}")
-            except ScriptNotFoundError as e:
-                logger.error(
-                    f"[{request_id}] Script not found for device '{raw_message.device_id}': {e}"
-                )
-                await self._publish_processing_error(
-                    "Script Not Found",
-                    error=str(e),
-                    original_message=job_dict,
-                    request_id=request_id,
-                    topic_details=(topic, partition, offset),
-                )
-                error_published = True
-                return True  # Indicate error was handled
-            except Exception as e:  # Catch storage errors
-                logger.exception(
-                    f"[{request_id}] Storage error fetching script for {raw_message.device_id}: {e}"
-                )
-                await self._publish_processing_error(
-                    "Script Storage Error",
-                    error=str(e),
-                    original_message=job_dict,
-                    request_id=request_id,
-                    topic_details=(topic, partition, offset),
-                )
-                error_published = True
-                return True  # Assume non-retryable for now
-
-            # 4. Fetch Hardware Configuration
+            # 3. Fetch Hardware Configuration
             hardware_config = await self._get_hardware_configuration(raw_message.device_id, request_id)
 
-            # 5. Initialize Translator and Execute script in Sandbox
+            # 4. Execute Parser Script with Translator
             try:
                 if hasattr(script_module, "parse"):
                     logger.info(f"Starting parser module {script_module} ...")
@@ -254,21 +224,14 @@ class NormalizerService:
                     # Convert hex string payload back to bytes for parser
                     payload_bytes = bytes.fromhex(raw_message.payload_hex) if raw_message.payload_hex else b''
                     
-                    # Initialize translator based on translator_used metadata
-                    translator_instance = await self._initialize_translator(raw_message, request_id)
-                    
-                    if not translator_instance:
-                        # If no translator, skip this message or use fallback
-                        logger.warning(f"[{request_id}] No translator available for device {raw_message.device_id}")
-                    
                     parser_output_list = script_module.parse(
                         payload=payload_bytes,  # Pass bytes to parser
-                        translator=translator_instance,  # Pass the translator instance
                         metadata={
                             **raw_message.metadata,  # Pass the raw message metadata
                             'device_id': raw_message.device_id  # Include device_id in config
                         },
-                        config=hardware_config
+                        config=hardware_config,
+                        message_parser=getattr(translator_instance, 'message_parser', None)  # Pass the message parser instance if available
                     )
                     # logger.info(f"parser output: {parser_output_list}")
                     # logger.info(f"[{request_id}] Parser output for payload: {raw_message.payload}: {parser_output_list} ")

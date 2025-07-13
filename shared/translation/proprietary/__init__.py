@@ -7,8 +7,8 @@ This module provides pattern-based device ID extraction that works across
 different communication protocols (MQTT, CoAP, HTTP, etc.).
 """
 
-from .translator import PatternTranslator
+from .translator import ProprietaryTranslator
 
 __all__ = [
-    'PatternTranslator'
+    'ProprietaryTranslator'
 ] 

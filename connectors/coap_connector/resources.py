@@ -1,6 +1,7 @@
 # coap_gateway/resources.py
 import logging
 from datetime import datetime, timezone
+from typing import Optional
 
 import aiocoap
 import aiocoap.resource as resource
@@ -220,7 +221,30 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                             logger.error(f"[{request_id}] Error handling pending commands: {e}")
                             # Continue with normal processing if command handling fails
 
-                    return aiocoap.Message(mtype=aiocoap.ACK, code=aiocoap.Code.CONTENT, token=request.token)
+                    # No command present - generate acknowledgment response
+                    try:
+                        # Generate manufacturer-specific acknowledgment response
+                        ack_response = await self._generate_acknowledgment_response(translation_result.device_id, translation_result.translator)
+                        
+                        if ack_response:
+                            logger.info(f"[{request_id}] Sending acknowledgment response to device {translation_result.device_id} ({len(ack_response)}B)")
+                            logger.debug(f"[{request_id}] Acknowledgment payload: {ack_response.hex()}")
+                            return aiocoap.Message(
+                                mtype=aiocoap.ACK,
+                                code=aiocoap.Code.CREATED,
+                                token=request.token,
+                                payload=ack_response
+                            )
+                        else:
+                            # Fall back to standard ACK
+                            logger.debug(f"[{request_id}] Using standard CoAP ACK (no manufacturer-specific response)")
+                            return aiocoap.Message(mtype=aiocoap.ACK, code=aiocoap.Code.CONTENT, token=request.token)
+                            
+                    except Exception as e:
+                        logger.error(f"[{request_id}] Error generating acknowledgment response: {e}")
+                        # Fall back to standard ACK
+                        logger.debug(f"[{request_id}] Falling back to standard CoAP ACK due to error")
+                        return aiocoap.Message(mtype=aiocoap.ACK, code=aiocoap.Code.CONTENT, token=request.token)
                     
                 except Exception as e:
                     logger.error(f"[{request_id}] Failed to create RawMessage: {e}")
@@ -269,3 +293,61 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                 success=False,
                 error=error_msg
             )
+
+    async def _generate_acknowledgment_response(self, device_id: str, translator=None) -> Optional[bytes]:
+        """
+        Generate manufacturer-specific acknowledgment response when no command is present.
+        
+        This method addresses the case where devices contact the server but no commands
+        are pending. For manufacturers like Efento, we still want to send meaningful
+        responses (e.g., current_time synchronization).
+        
+        Args:
+            device_id: The device ID to generate acknowledgment response for
+            translator: The translator instance used for device ID extraction (optional)
+            
+        Returns:
+            bytes: Manufacturer-specific response payload or None for standard CoAP ACK
+        """
+        try:
+            # Use the translator that was provided (from translation result)
+            # or fall back to searching through all translators
+            translator_with_script = None
+            
+            if translator and hasattr(translator, 'script_module'):
+                # Load script module if not already loaded
+                if not translator.script_module and hasattr(translator, 'parser_script_path') and translator.parser_script_path:
+                    try:
+                        logger.info(f"Loading script module for translator: {translator.parser_script_path}")
+                        await translator.load_script_module_async()
+                    except Exception as e:
+                        logger.warning(f"Failed to load script module for translator: {e}")
+                
+                if translator.script_module:
+                    translator_with_script = translator
+                    logger.debug(f"Using translator from translation result for device {device_id}")
+            
+
+            if translator_with_script and translator_with_script.script_module:
+                script_module = translator_with_script.script_module
+                
+                if hasattr(script_module, 'format_response'):
+                    # Generate acknowledgment response (no command present)
+                    response_bytes = script_module.format_response(
+                        config={},  # Use empty hardware config for now
+                        message_parser=translator_with_script.message_parser,
+                    )
+                    
+                    logger.debug(f"Generated acknowledgment response for device {device_id}: {len(response_bytes) if response_bytes else 0}B")
+                    return response_bytes
+                else:
+                    logger.debug(f"Script module for device {device_id} does not support format_response")
+            else:
+                logger.debug(f"No translator with script module found for device {device_id}")
+                
+        except Exception as e:
+            logger.error(f"Error generating acknowledgment response for device {device_id}: {e}")
+            
+        return None
+
+# Removed _get_parser_script_path_for_device method - now using translator directly from translation result

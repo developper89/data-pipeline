@@ -10,7 +10,6 @@ from kafka import KafkaConsumer
 from kafka.errors import KafkaError
 
 from shared.mq.kafka_helpers import AsyncResilientKafkaConsumer
-from shared.utils.script_client import ScriptClient
 from shared.config_loader import get_translator_configs
 from shared.translation.factory import TranslatorFactory
 from shared.models.common import CommandMessage
@@ -36,15 +35,9 @@ class CommandConsumer:
         # In a production system, this would be a persistent store
         self.pending_commands: Dict[str, List[Dict[str, Any]]] = {}
         
-        # Parser-based command formatting support
-        self.script_client = ScriptClient(
-            storage_type=config.SCRIPT_STORAGE_TYPE,
-            local_dir=config.LOCAL_SCRIPT_DIR
-        )
-        # Cache for loaded parsers and translators
-        self._parser_cache = {}
+        # Cache for loaded translators
         self._translator_cache = {}
-        logger.info("Command consumer initialized with parser-based formatting support")
+        logger.info("Command consumer initialized with translator-based formatting support")
         
     async def start(self):
         """Start the command consumer."""
@@ -158,28 +151,30 @@ class CommandConsumer:
                 logger.error(f"[{request_id}] Invalid command message: missing device_id")
                 return True
 
-            # Format command using parser-based approach
-            formatted_command = await self._format_command_with_parser(device_id, command_message)
-            if formatted_command:
-                # Store the formatted command
-                await self._store_formatted_command(device_id, command_message, formatted_command)
-                logger.info(f"[{request_id}] Formatted and stored command for device {device_id}")
+            # Format command and response using parser-based approach
+            formatted_data = await self._format_command_with_parser(device_id, command_message)
+            if formatted_data:
+                # Store the formatted command and response
+                await self._store_formatted_command(device_id, command_message, formatted_data)
+                logger.info(f"[{request_id}] Formatted and stored command with response for device {device_id}")
                 return True
 
             # If we get here, we couldn't format the command
-            logger.error(f"[{request_id}] Unable to format command for device {device_id}: parser script not found or formatting failed")
+            logger.error(f"[{request_id}] Unable to format command and response for device {device_id}: parser script not found or formatting failed")
             return True  # Consider this as processed (won't retry)
 
         except Exception as e:
             logger.exception(f"Error processing command: {e}")
             return False  # Indicate failure - message will be retried
 
-    async def _store_formatted_command(self, device_id: str, command_message: CommandMessage, formatted_command: bytes):
+    async def _store_formatted_command(self, device_id: str, command_message: CommandMessage, formatted_data: bytes):
         """Store a command formatted by parser."""
-        # Convert formatted binary command to hex string for storage
-        hex_command = formatted_command.hex()
+        command_bytes = formatted_data
+        
+        # Convert formatted binary command and response to hex strings for storage
+        hex_command = command_bytes.hex() if command_bytes else ""
 
-        # Update command data with formatted payload
+        # Update command data with formatted payload and response
         enhanced_command = command_message.model_dump()
         enhanced_command['payload'] = {
             'formatted_command': hex_command,
@@ -195,7 +190,7 @@ class CommandConsumer:
 
     async def _format_command_with_parser(self, device_id: str, command_message: CommandMessage) -> Optional[bytes]:
         """
-        Format command using device-specific parser.
+        Format command and response using device-specific parser from translator.
         
         Args:
             device_id: Target device identifier
@@ -204,27 +199,38 @@ class CommandConsumer:
                 - command_type: Type of command (e.g., "alarm", "config")
                 - payload: Command-specific data
                 - protocol: Communication protocol
-                - metadata: Optional metadata containing parser_script_path and manufacturer
+                - metadata: Optional metadata containing manufacturer information
             
         Returns:
-            bytes: Formatted binary command or None if formatting fails
+            bytes: command_bytes or None if formatting fails
         """
         try:
-            # Get parser script path and manufacturer from command metadata
+            # Get metadata from command message
             metadata = command_message.metadata or {}
-            parser_script_path = metadata.get('parser_script_path')
-            if not parser_script_path:
-                logger.error(f"No parser script path provided in command metadata for device {device_id}")
-                return None
-            
             manufacturer = metadata.get('manufacturer')
-            if not manufacturer:
-                logger.warning(f"No manufacturer provided in command metadata for device {device_id}, translator selection may be less accurate")
+            command_type = command_message.command_type
 
-            # Load parser module (with caching)
-            script_module = await self._get_parser_module(parser_script_path)
+            # Get translator instance based on command type and manufacturer
+            translator = await self._get_translator_for_device(device_id, command_type, manufacturer)
+            if not translator:
+                logger.error(f"No translator found for device {device_id} with manufacturer {manufacturer}")
+                return None
+
+            # Get script module from translator
+            script_module = None
+            if hasattr(translator, 'script_module') and translator.script_module:
+                script_module = translator.script_module
+            elif hasattr(translator, 'parser_script_path') and translator.parser_script_path:
+                # Try to load the script module if it's not already loaded
+                try:
+                    await translator.load_script_module_async()
+                    script_module = translator.script_module
+                except Exception as e:
+                    logger.error(f"Failed to load script module for translator: {e}")
+                    return None
+
             if not script_module:
-                logger.error(f"Failed to load parser for device {device_id} from path {parser_script_path}")
+                logger.error(f"No script module available for device {device_id}")
                 return None
 
             # Check if parser supports command formatting
@@ -232,45 +238,23 @@ class CommandConsumer:
                 logger.error(f"Parser for device {device_id} does not support command formatting")
                 return None
 
-            # Get translator instance based on command type and manufacturer
-            command_type = command_message.command_type
-            translator = await self._get_translator_for_device(device_id, command_type, manufacturer)
-
-            # Use empty hardware configuration for now
-            hardware_config = {}
-
             # Format command using parser - convert CommandMessage to dict for parser
             command_dict = command_message.model_dump()
+            
+            # Format command
             binary_command = script_module.format_command(
                 command=command_dict,
-                translator=translator,
-                config=hardware_config
+                message_parser=translator.message_parser,
+                config={}
             )
 
             return binary_command
 
         except Exception as e:
-            logger.exception(f"Error formatting command for device {device_id}: {e}")
+            logger.exception(f"Error formatting command and response for device {device_id}: {e}")
             return None
 
-    async def _get_parser_module(self, file_path: str):
-        """Get parser module with caching."""
-        if file_path not in self._parser_cache:
-            try:
-                # If file_path is relative, use it directly; if absolute, get basename
-                if os.path.isabs(file_path):
-                    filename = os.path.basename(file_path)
-                else:
-                    filename = file_path
-                
-                script_ref = os.path.join(self.script_client.local_dir, filename)
-                module = await self.script_client.get_module(script_ref)
-                self._parser_cache[file_path] = module
-            except Exception as e:
-                logger.error(f"Failed to load parser module {file_path}: {e}")
-                return None
-
-        return self._parser_cache[file_path]
+# Removed _get_parser_module method - now using script module directly from translator
 
     async def _get_translator_for_device(self, device_id: str, command_type: str = None, manufacturer: str = None):
         """Get translator instance for device based on command type and manufacturer."""
@@ -319,6 +303,15 @@ class CommandConsumer:
 
                 if selected_translator_config:
                     translator = TranslatorFactory.create_translator(selected_translator_config)
+                    
+                    # Load script module if translator has parser_script_path
+                    if hasattr(translator, 'parser_script_path') and translator.parser_script_path:
+                        try:
+                            await translator.load_script_module_async()
+                            logger.debug(f"Loaded script module for translator '{manufacturer}', command_type '{command_type}'")
+                        except Exception as e:
+                            logger.warning(f"Failed to load script module for translator: {e}")
+                    
                     self._translator_cache[cache_key] = translator
                     logger.debug(f"Created translator for manufacturer '{manufacturer}', command_type '{command_type}'")
                 else:
@@ -406,4 +399,4 @@ class CommandConsumer:
                 
         except Exception as e:
             logger.exception(f"[{command_id}] Error getting formatted command for device {device_id}: {e}")
-            return None 
+            return None

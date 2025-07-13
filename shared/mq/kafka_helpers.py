@@ -102,27 +102,29 @@ def get_optimized_consumer_config(group_id: str, **overrides) -> Dict[str, Any]:
     """Get optimized consumer configuration to handle common connection issues."""
     config = {
         'enable_auto_commit': False,  # Manual commit for better control
-        'request_timeout_ms': 120000,  # 2 minutes - increased from default
-        'session_timeout_ms': 90000,   # 1.5 minutes - increased from default
-        'heartbeat_interval_ms': 30000,  # 30 seconds - increased from default
-        'metadata_max_age_ms': 60000,   # 1 minute - increased from default
-        'reconnect_backoff_ms': 2000,   # 2 seconds - increased from default
-        'reconnect_backoff_max_ms': 64000,  # 64 seconds max backoff
-        'retry_backoff_ms': 1000,       # 1 second between retries
-        'api_version_auto_timeout_ms': 30000,  # 30 seconds for API version detection
+        'request_timeout_ms': 60000,  # 1 minute - reduced from 2 minutes for faster detection
+        'session_timeout_ms': 30000,   # 30 seconds - reduced from 90 seconds for faster detection
+        'heartbeat_interval_ms': 10000,  # 10 seconds - reduced from 30 seconds for faster detection
+        'metadata_max_age_ms': 30000,   # 30 seconds - reduced from 60 seconds
+        'reconnect_backoff_ms': 1000,   # 1 second - reduced from 2 seconds for faster recovery
+        'reconnect_backoff_max_ms': 32000,  # 32 seconds - reduced from 64 seconds
+        'retry_backoff_ms': 500,       # 500ms - reduced from 1 second for faster retries
+        'api_version_auto_timeout_ms': 15000,  # 15 seconds - reduced from 30 seconds
         'security_protocol': 'PLAINTEXT',
         'consumer_timeout_ms': 1000,    # Timeout for poll()
         # Fetch settings for better performance
         'fetch_min_bytes': 1,
-        'fetch_max_wait_ms': 1000,      # Max wait time for fetch
+        'fetch_max_wait_ms': 500,      # 500ms - reduced from 1000ms for faster response
         'max_partition_fetch_bytes': 1048576,  # 1MB per partition
         # Connection pool settings
-        'connections_max_idle_ms': 300000,  # 5 minutes
+        'connections_max_idle_ms': 180000,  # 3 minutes - reduced from 5 minutes
         'max_poll_records': 500,
-        'max_poll_interval_ms': 600000,     # 10 minutes max poll interval
-        # Group coordination settings
+        'max_poll_interval_ms': 300000,     # 5 minutes - reduced from 10 minutes
+        # Group coordination settings - MORE SENSITIVE
         'group_id': group_id,
         'auto_offset_reset': 'earliest',
+        # Enhanced group coordination
+        'check_crcs': True,  # Enable CRC checking
     }
     
     # Apply any overrides
@@ -262,7 +264,9 @@ def safe_kafka_poll(consumer: KafkaConsumer, timeout_ms: int = 1000) -> Dict[Any
         KafkaError: When connection/polling fails (to trigger reconnection)
     """
     try:
+        # Simplified coordinator checks - avoid complex attribute access for now
         return consumer.poll(timeout_ms=timeout_ms)
+        
     except (KafkaError, KafkaTimeoutError) as e:
         logger.error(f"Kafka poll error: {e}")
         # Re-raise to trigger reconnection logic
@@ -331,6 +335,39 @@ def is_consumer_healthy(consumer: KafkaConsumer) -> bool:
             logger.warning("Consumer health check failed: no topics visible (possible connectivity issue)")
             return False
         
+        # ENHANCED: Check group coordinator health - simplified for robustness
+        try:
+            # Check if coordinator is available and consumer is properly registered
+            if hasattr(consumer, '_coordinator') and consumer._coordinator:
+                coordinator = consumer._coordinator
+                
+                # Basic check for coordinator health - simplified to avoid version issues
+                try:
+                    # Check if coordinator has basic expected attributes
+                    if hasattr(coordinator, '__dict__'):
+                        coord_dict = coordinator.__dict__
+                        
+                        # Check for rejoin flag if it exists
+                        if '_need_rejoin' in coord_dict and coord_dict.get('_need_rejoin', False):
+                            logger.warning("Consumer health check failed: consumer needs to rejoin group")
+                            return False
+                        
+                        # Check for dead coordinator flag if it exists
+                        if '_coordinator_dead' in coord_dict and coord_dict.get('_coordinator_dead', False):
+                            logger.warning("Consumer health check failed: group coordinator is marked as dead")
+                            return False
+                            
+                except (AttributeError, TypeError, KeyError):
+                    # Skip coordinator-specific checks if attributes not available
+                    pass
+                    
+        except (AttributeError, TypeError) as coord_error:
+            # Ignore attribute/type errors in coordinator checks - different kafka-python versions
+            logger.debug(f"Coordinator check skipped due to version differences: {coord_error}")
+        except Exception as coord_error:
+            logger.warning(f"Consumer health check failed during coordinator check: {coord_error}")
+            return False
+        
         # Additional check: Verify group membership if consumer is assigned to partitions
         try:
             assignment = consumer.assignment()
@@ -360,7 +397,8 @@ def is_consumer_healthy(consumer: KafkaConsumer) -> bool:
         # If we can retrieve topics, the consumer is healthy
         # Note: bootstrap_connected() can be false even when consumer is working fine
         # after initial connection, so we don't check it anymore
-        logger.debug(f"Consumer health check passed: {len(topics)} topics visible, {len(consumer.assignment())} partitions assigned")
+        logger.info(f"bootstrap_connected: {consumer.bootstrap_connected()}")
+        logger.info(f"Consumer health check passed: {len(topics)} topics visible, {len(consumer.assignment())} partitions assigned")
         return True
         
     except Exception as e:
@@ -416,7 +454,7 @@ class AsyncResilientKafkaConsumer:
         self.last_error = None
         self._stop_event = asyncio.Event()
         self._last_health_check = 0
-        self._health_check_interval = 30  # Check health every 30 seconds
+        self._health_check_interval = 10  # Check health every 10 seconds (reduced from 30)
         self._running = False
         
     async def _create_consumer(self):
@@ -527,7 +565,7 @@ class AsyncResilientKafkaConsumer:
         logger.info(f"AsyncResilientKafkaConsumer started for topic '{self.topic}'")
         
         consecutive_empty_polls = 0
-        max_consecutive_empty_polls = 300  # 5 minutes of empty polls before health check
+        max_consecutive_empty_polls = 60  # 1 minute of empty polls (reduced from 300/5 minutes)
         
         while self._running and not self._stop_event.is_set():
             try:

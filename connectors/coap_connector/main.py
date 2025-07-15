@@ -51,25 +51,29 @@ class CoAPConnectorService:
             self.kafka_msg_producer = KafkaMsgProducer(create_kafka_producer(config.KAFKA_BOOTSTRAP_SERVERS))
             logger.info("Kafka producer created successfully")
             
+            # Initialize command consumer
+            self.command_consumer = CommandConsumer()
+            await self.command_consumer.start()
+            
             # Initialize CoAP server with required parameters
             logger.info(f"Creating CoAP server on {config.COAP_HOST}:{config.COAP_PORT}")
             self.coap_server = CoapGatewayServer(
                 host=config.COAP_HOST,
                 port=config.COAP_PORT,
-                kafka_producer=self.kafka_msg_producer
+                kafka_producer=self.kafka_msg_producer,
+                command_consumer=self.command_consumer  # Pass the command consumer
             )
-            
-            # Initialize command consumer
-            self.command_consumer = CommandConsumer()
-            await self.command_consumer.start()
             
             self.running = True
             logger.info("CoAP Connector Service started successfully")
             
-            # Start both server and command consumer concurrently
+            # Start the CoAP server (sets up server, returns immediately)
+            await self.coap_server.start()
+            
+            # Now start both the server wait task and command consumer concurrently
             await asyncio.gather(
-                self.coap_server.start(),
-                self.command_consumer.consume_commands()
+                self.coap_server._run_task,  # Wait for server stop event
+                self.command_consumer.consume_commands()  # Run command consumer
             )
             
         except Exception as e:

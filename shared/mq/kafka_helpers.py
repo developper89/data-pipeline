@@ -1,8 +1,8 @@
 # shared/mq/kafka_helpers.py
 import json
 import logging
-from kafka import KafkaProducer, KafkaConsumer, TopicPartition, OffsetAndMetadata
-from kafka.errors import KafkaError, NoBrokersAvailable, KafkaTimeoutError
+from confluent_kafka import Producer, Consumer, KafkaError, KafkaException, TopicPartition
+from confluent_kafka.admin import AdminClient, NewTopic
 import time
 import socket
 from datetime import datetime
@@ -10,7 +10,7 @@ import asyncio
 from typing import Optional, Dict, Any, Callable, List, Union
 
 logger = logging.getLogger(__name__)
-logging.getLogger("kafka").setLevel(logging.WARNING)
+logging.getLogger("confluent_kafka").setLevel(logging.WARNING)
 logger.setLevel(logging.INFO)
 
 class DateTimeEncoder(json.JSONEncoder):
@@ -99,32 +99,19 @@ def validate_bootstrap_servers(bootstrap_servers):
     return validated_servers
 
 def get_optimized_consumer_config(group_id: str, **overrides) -> Dict[str, Any]:
-    """Get optimized consumer configuration to handle common connection issues."""
+    """Get minimal consumer configuration for confluent-kafka compatibility."""
     config = {
-        'enable_auto_commit': False,  # Manual commit for better control
-        'request_timeout_ms': 60000,  # 1 minute - reduced from 2 minutes for faster detection
-        'session_timeout_ms': 30000,   # 30 seconds - reduced from 90 seconds for faster detection
-        'heartbeat_interval_ms': 10000,  # 10 seconds - reduced from 30 seconds for faster detection
-        'metadata_max_age_ms': 30000,   # 30 seconds - reduced from 60 seconds
-        'reconnect_backoff_ms': 1000,   # 1 second - reduced from 2 seconds for faster recovery
-        'reconnect_backoff_max_ms': 32000,  # 32 seconds - reduced from 64 seconds
-        'retry_backoff_ms': 500,       # 500ms - reduced from 1 second for faster retries
-        'api_version_auto_timeout_ms': 15000,  # 15 seconds - reduced from 30 seconds
-        'security_protocol': 'PLAINTEXT',
-        'consumer_timeout_ms': 1000,    # Timeout for poll()
-        # Fetch settings for better performance
-        'fetch_min_bytes': 1,
-        'fetch_max_wait_ms': 500,      # 500ms - reduced from 1000ms for faster response
-        'max_partition_fetch_bytes': 1048576,  # 1MB per partition
-        # Connection pool settings
-        'connections_max_idle_ms': 180000,  # 3 minutes - reduced from 5 minutes
-        'max_poll_records': 500,
-        'max_poll_interval_ms': 300000,     # 5 minutes - reduced from 10 minutes
-        # Group coordination settings - MORE SENSITIVE
-        'group_id': group_id,
-        'auto_offset_reset': 'earliest',
-        # Enhanced group coordination
-        'check_crcs': True,  # Enable CRC checking
+        'bootstrap.servers': '',  # Will be set later
+        'group.id': group_id,
+        'auto.offset.reset': 'earliest',
+        'enable.auto.commit': False,  # Manual commit for better control
+        'session.timeout.ms': 30000,   # 30 seconds
+        'heartbeat.interval.ms': 10000,  # 10 seconds  
+        'max.poll.interval.ms': 300000,  # 5 minutes
+        'socket.keepalive.enable': True,
+        'client.id': f'{group_id}_client',
+        'security.protocol': 'PLAINTEXT',
+        'statistics.interval.ms': 0,  # Disable statistics
     }
     
     # Apply any overrides
@@ -132,26 +119,17 @@ def get_optimized_consumer_config(group_id: str, **overrides) -> Dict[str, Any]:
     return config
 
 def get_optimized_producer_config(**overrides) -> Dict[str, Any]:
-    """Get optimized producer configuration to handle common connection issues."""
+    """Get minimal producer configuration for confluent-kafka compatibility."""
     config = {
-        'retries': 10,  # Increased retries
+        'bootstrap.servers': '',  # Will be set later
         'acks': 'all',  # Wait for all replicas
-        'request_timeout_ms': 120000,  # 2 minutes - increased from default
-        'metadata_max_age_ms': 60000,  # 1 minute - increased from default
-        'reconnect_backoff_ms': 2000,  # 2 seconds - increased from default
-        'reconnect_backoff_max_ms': 64000,  # 64 seconds max backoff
-        'retry_backoff_ms': 1000,      # 1 second between retries
-        'max_block_ms': 30000,         # 30 seconds max block time
-        'api_version_auto_timeout_ms': 30000,  # 30 seconds for API version detection
-        'security_protocol': 'PLAINTEXT',
-        # Buffer and batch settings for better performance
-        'buffer_memory': 67108864,     # 64MB buffer - increased from default
-        'batch_size': 32768,           # 32KB batch size - increased from default
-        'linger_ms': 20,               # Wait 20ms for batching
-        'compression_type': 'gzip',    # Compress messages
-        # Connection settings
-        'connections_max_idle_ms': 300000,  # 5 minutes
-        'delivery_timeout_ms': 300000,      # 5 minutes total delivery timeout
+        'retries': 10,  # Increased retries
+        'request.timeout.ms': 120000,  # 2 minutes
+        'delivery.timeout.ms': 300000,  # 5 minutes
+        'socket.keepalive.enable': True,
+        'security.protocol': 'PLAINTEXT',
+        'client.id': 'producer_client',
+        'statistics.interval.ms': 0,   # Disable statistics
     }
     
     # Apply any overrides
@@ -159,7 +137,7 @@ def get_optimized_producer_config(**overrides) -> Dict[str, Any]:
     return config
 
 def create_kafka_producer(bootstrap_servers, base_delay=1, **config_overrides):
-    """Creates a KafkaProducer instance with enhanced error handling and optimized configuration."""
+    """Creates a confluent-kafka Producer instance with enhanced error handling."""
     # Validate servers first
     validated_servers = validate_bootstrap_servers(bootstrap_servers)
     if not validated_servers:
@@ -173,23 +151,16 @@ def create_kafka_producer(bootstrap_servers, base_delay=1, **config_overrides):
         try:
             # Get optimized configuration
             config = get_optimized_producer_config(**config_overrides)
-            config['bootstrap_servers'] = validated_servers.split(',')
-            config['value_serializer'] = lambda v: json.dumps(v, cls=DateTimeEncoder).encode('utf-8')
+            config['bootstrap.servers'] = validated_servers
             
-            producer = KafkaProducer(**config)
-            logger.info(f"KafkaProducer connected to {validated_servers}")
+            logger.debug(f"Creating Producer with config: {config}")
+            producer = Producer(config)
+            logger.info(f"Kafka Producer connected to {validated_servers}")
             return producer
             
-        except NoBrokersAvailable as e:
+        except KafkaException as e:
             retry_count += 1
             delay = base_delay * (2 ** min(retry_count - 1, 6))  # Exponential backoff, max 64 seconds
-            logger.error(f"No Kafka brokers available (attempt {retry_count}): {e}")
-            logger.info(f"Retrying in {delay} seconds...")
-            time.sleep(delay)
-                
-        except KafkaError as e:
-            retry_count += 1
-            delay = base_delay * (2 ** min(retry_count - 1, 6))
             logger.error(f"Kafka error creating producer (attempt {retry_count}): {e}")
             logger.info(f"Retrying in {delay} seconds...")
             time.sleep(delay)
@@ -201,9 +172,8 @@ def create_kafka_producer(bootstrap_servers, base_delay=1, **config_overrides):
             logger.info(f"Retrying in {delay} seconds...")
             time.sleep(delay)
 
-
 def create_kafka_consumer(topic, group_id, bootstrap_servers, auto_offset_reset='earliest', base_delay=1, **config_overrides):
-    """Creates a KafkaConsumer instance with enhanced error handling and optimized configuration."""
+    """Creates a confluent-kafka Consumer instance with enhanced error handling."""
     logger.info(f"Creating Kafka consumer for topic '{topic}', group '{group_id}', servers: {bootstrap_servers}")
     
     # Validate servers first
@@ -218,23 +188,19 @@ def create_kafka_consumer(topic, group_id, bootstrap_servers, auto_offset_reset=
     while consumer is None:
         try:
             # Get optimized configuration
-            config = get_optimized_consumer_config(group_id, auto_offset_reset=auto_offset_reset, **config_overrides)
-            config['bootstrap_servers'] = validated_servers.split(',')
-            config['value_deserializer'] = lambda v: json.loads(v.decode('utf-8'))
+            config = get_optimized_consumer_config(group_id, **config_overrides)
+            config['bootstrap.servers'] = validated_servers
+            config['auto.offset.reset'] = auto_offset_reset
             
-            logger.debug(f"Creating KafkaConsumer with config: {config}")
-            consumer = KafkaConsumer(topic, **config)
-            logger.info(f"KafkaConsumer connected to {validated_servers} for topic '{topic}', group '{group_id}'")
+            logger.debug(f"Creating Consumer with config: {config}")
+            consumer = Consumer(config)
+            
+            # Subscribe to topic
+            consumer.subscribe([topic])
+            logger.info(f"Kafka Consumer connected to {validated_servers} for topic '{topic}', group '{group_id}'")
             return consumer
             
-        except NoBrokersAvailable as e:
-            retry_count += 1
-            delay = base_delay * (2 ** min(retry_count - 1, 6))
-            logger.error(f"No Kafka brokers available for consumer (attempt {retry_count}): {e}")
-            logger.info(f"Retrying in {delay} seconds...")
-            time.sleep(delay)
-                
-        except KafkaError as e:
+        except KafkaException as e:
             retry_count += 1
             delay = base_delay * (2 ** min(retry_count - 1, 6))
             logger.error(f"Kafka error creating consumer (attempt {retry_count}): {e}")
@@ -248,165 +214,125 @@ def create_kafka_consumer(topic, group_id, bootstrap_servers, auto_offset_reset=
             logger.info(f"Retrying in {delay} seconds...")
             time.sleep(delay)
 
-
-def safe_kafka_poll(consumer: KafkaConsumer, timeout_ms: int = 1000) -> Dict[Any, List[Any]]:
+def safe_kafka_poll(consumer: Consumer, timeout: float = 1.0) -> Optional[Any]:
     """
     Safely poll Kafka consumer with enhanced error handling.
     
     Args:
-        consumer: KafkaConsumer instance
-        timeout_ms: Timeout in milliseconds
+        consumer: Consumer instance
+        timeout: Timeout in seconds
         
     Returns:
-        Message batch dictionary, empty dict on error
-        
-    Raises:
-        KafkaError: When connection/polling fails (to trigger reconnection)
+        Message or None, raises KafkaException on error
     """
     try:
-        # Simplified coordinator checks - avoid complex attribute access for now
-        return consumer.poll(timeout_ms=timeout_ms)
+        msg = consumer.poll(timeout=timeout)
         
-    except (KafkaError, KafkaTimeoutError) as e:
+        if msg is None:
+            return None
+            
+        if msg.error():
+            if msg.error().code() == KafkaError._PARTITION_EOF:
+                # End of partition event, not an error
+                logger.debug(f'Reached end of partition {msg.topic()}[{msg.partition()}] at offset {msg.offset()}')
+                return None
+            else:
+                # Real error
+                logger.error(f"Consumer error: {msg.error()}")
+                raise KafkaException(msg.error())
+        
+        return msg
+        
+    except KafkaException as e:
         logger.error(f"Kafka poll error: {e}")
-        # Re-raise to trigger reconnection logic
         raise
     except Exception as e:
         logger.error(f"Unexpected error during Kafka poll: {e}")
-        # Re-raise as KafkaError to trigger reconnection
-        raise KafkaError(f"Unexpected poll error: {e}")
+        raise KafkaException(f"Unexpected poll error: {e}")
 
-def safe_kafka_commit(consumer: KafkaConsumer, offsets: Optional[Dict] = None) -> bool:
+def safe_kafka_commit(consumer: Consumer, message=None, offsets=None, asynchronous=True) -> bool:
     """
     Safely commit Kafka consumer offsets with enhanced error handling.
     
     Args:
-        consumer: KafkaConsumer instance
-        offsets: Optional specific offsets to commit (can be {TopicPartition: offset} or {TopicPartition: OffsetAndMetadata})
+        consumer: Consumer instance
+        message: Optional message to commit (commits message offset + 1)
+        offsets: Optional list of TopicPartition to commit
+        asynchronous: Whether to commit asynchronously
         
     Returns:
         True if commit successful, False otherwise
     """
     try:
-        if offsets:
-            # Validate that offsets are in the correct format
-            if not isinstance(offsets, dict):
-                logger.warning(f"Invalid offsets format, expected dict: {type(offsets)}")
-                return False
-            
-            # Check if all keys are TopicPartition objects
-            for tp in offsets.keys():
-                if not isinstance(tp, TopicPartition):
-                    logger.warning(f"Invalid topic partition format in commit: {tp}")
-                    return False
-            
-            logger.debug(f"Committing offsets: {offsets}")
-            consumer.commit(offsets)
+        if message:
+            # Commit specific message
+            consumer.commit(message=message, asynchronous=asynchronous)
+        elif offsets:
+            # Commit specific offsets
+            consumer.commit(offsets=offsets, asynchronous=asynchronous)
         else:
-            consumer.commit()
+            # Commit all current offsets
+            consumer.commit(asynchronous=asynchronous)
         return True
-    except KafkaError as e:
+    except KafkaException as e:
         logger.error(f"Kafka commit error: {e}")
         return False
     except Exception as e:
         logger.error(f"Unexpected error during Kafka commit: {e}", exc_info=True)
         return False
 
-def is_consumer_healthy(consumer: KafkaConsumer) -> bool:
+def is_consumer_healthy(consumer: Consumer) -> bool:
     """
     Check if a Kafka consumer is healthy and able to communicate with brokers.
     
     Args:
-        consumer: KafkaConsumer instance
+        consumer: Consumer instance
         
     Returns:
         True if consumer is healthy, False otherwise
     """
     try:
-        # Primary check: Try to get cluster metadata - this will fail if connection is bad
-        # Use a simple topic lookup to test connectivity
-        topics = consumer.topics()
-        if topics is None:
-            logger.warning("Consumer health check failed: unable to retrieve topic metadata")
+        # Check cluster metadata to verify connectivity
+        metadata = consumer.list_topics(timeout=10)
+        if metadata is None:
+            logger.warning("Consumer health check failed: unable to retrieve cluster metadata")
             return False
         
-        # Secondary check: Verify we can see some topics (empty is suspicious)
-        if isinstance(topics, set) and len(topics) == 0:
+        # Check if we can see topics
+        if len(metadata.topics) == 0:
             logger.warning("Consumer health check failed: no topics visible (possible connectivity issue)")
             return False
         
-        # ENHANCED: Check group coordinator health - simplified for robustness
-        try:
-            # Check if coordinator is available and consumer is properly registered
-            if hasattr(consumer, '_coordinator') and consumer._coordinator:
-                coordinator = consumer._coordinator
-                
-                # Basic check for coordinator health - simplified to avoid version issues
-                try:
-                    # Check if coordinator has basic expected attributes
-                    if hasattr(coordinator, '__dict__'):
-                        coord_dict = coordinator.__dict__
-                        
-                        # Check for rejoin flag if it exists
-                        if '_need_rejoin' in coord_dict and coord_dict.get('_need_rejoin', False):
-                            logger.warning("Consumer health check failed: consumer needs to rejoin group")
-                            return False
-                        
-                        # Check for dead coordinator flag if it exists
-                        if '_coordinator_dead' in coord_dict and coord_dict.get('_coordinator_dead', False):
-                            logger.warning("Consumer health check failed: group coordinator is marked as dead")
-                            return False
-                            
-                except (AttributeError, TypeError, KeyError):
-                    # Skip coordinator-specific checks if attributes not available
-                    pass
-                    
-        except (AttributeError, TypeError) as coord_error:
-            # Ignore attribute/type errors in coordinator checks - different kafka-python versions
-            logger.debug(f"Coordinator check skipped due to version differences: {coord_error}")
-        except Exception as coord_error:
-            logger.warning(f"Consumer health check failed during coordinator check: {coord_error}")
-            return False
-        
-        # Additional check: Verify group membership if consumer is assigned to partitions
+        # Check consumer assignment
         try:
             assignment = consumer.assignment()
             if assignment:
-                # If we have partitions assigned, check if we can get high water marks
-                # This will fail if consumer group membership is invalid
-                for tp in list(assignment)[:1]:  # Just check one partition to avoid overhead
-                    try:
-                        consumer.highwater(tp)
-                    except Exception as hw_error:
-                        logger.warning(f"Consumer health check failed: highwater check failed for {tp}: {hw_error}")
+                logger.debug(f"Consumer assigned to {len(assignment)} partitions")
+                
+                # Check if we can get committed offsets for assigned partitions
+                try:
+                    committed = consumer.committed(assignment, timeout=5)
+                    if committed is None:
+                        logger.warning("Consumer health check failed: could not get committed offsets")
                         return False
-            
-                    
+                except Exception as commit_error:
+                    logger.warning(f"Consumer health check failed: committed offset check failed: {commit_error}")
+                    return False
+            else:
+                logger.debug("Consumer not yet assigned to any partitions")
         except Exception as assignment_error:
             logger.warning(f"Consumer health check failed during assignment check: {assignment_error}")
             return False
             
-        # Additional check: Verify we can get committed offsets
-        try:
-            if consumer.assignment():
-                consumer.committed(next(iter(consumer.assignment())))
-        except Exception as commit_error:
-            logger.warning(f"Consumer health check failed: committed offset check failed: {commit_error}")
-            return False
-            
-        # If we can retrieve topics, the consumer is healthy
-        # Note: bootstrap_connected() can be false even when consumer is working fine
-        # after initial connection, so we don't check it anymore
-        logger.info(f"bootstrap_connected: {consumer.bootstrap_connected()}")
-        logger.info(f"Consumer health check passed: {len(topics)} topics visible, {len(consumer.assignment())} partitions assigned")
+        logger.debug(f"Consumer health check passed: {len(metadata.topics)} topics visible, {len(consumer.assignment())} partitions assigned")
         return True
         
     except Exception as e:
         logger.warning(f"Consumer health check failed with exception: {e}")
         return False
 
-def recreate_consumer_on_error(consumer: KafkaConsumer, topic: str, group_id: str, 
-                              bootstrap_servers: str, **config_overrides) -> Optional[KafkaConsumer]:
+def recreate_consumer_on_error(consumer: Consumer, topic: str, group_id: str, 
+                              bootstrap_servers: str, **config_overrides) -> Optional[Consumer]:
     """
     Recreate a consumer when it encounters errors.
     
@@ -434,7 +360,6 @@ def recreate_consumer_on_error(consumer: KafkaConsumer, topic: str, group_id: st
         logger.error(f"Failed to recreate consumer: {e}")
         return None
 
-
 class AsyncResilientKafkaConsumer:
     """An async-compatible resilient Kafka consumer wrapper that handles reconnections and errors gracefully."""
     
@@ -447,14 +372,14 @@ class AsyncResilientKafkaConsumer:
         self.max_retries = max_retries
         self.base_delay = base_delay
         self.on_error_callback = on_error_callback
-        self.seek_to_end = seek_to_end  # New parameter to seek to end after assignment
+        self.seek_to_end = seek_to_end
         self.config_overrides = config_overrides
         self.consumer = None
         self.retry_count = 0
         self.last_error = None
         self._stop_event = asyncio.Event()
         self._last_health_check = 0
-        self._health_check_interval = 10  # Check health every 10 seconds (reduced from 30)
+        self._health_check_interval = 10  # Check health every 10 seconds
         self._running = False
         
     async def _create_consumer(self):
@@ -495,14 +420,14 @@ class AsyncResilientKafkaConsumer:
             return False
     
     async def _setup_seek_to_end(self):
-        """Setup consumer to seek to end of partitions (for cache services that only want latest data)."""
+        """Setup consumer to seek to end of partitions."""
         if not self.consumer:
             return
             
         logger.info(f"Setting up seek to end for topic '{self.topic}'")
         
-        # Wait for partition assignment with timeout
-        max_wait_time = 30  # Maximum wait time in seconds
+        # Wait for partition assignment
+        max_wait_time = 30
         wait_start = time.time()
         
         while not self.consumer.assignment():
@@ -512,28 +437,30 @@ class AsyncResilientKafkaConsumer:
                 
             # Trigger partition assignment by polling briefly
             try:
-                self.consumer.poll(timeout_ms=100)
+                msg = self.consumer.poll(timeout=0.1)
+                if msg and msg.error():
+                    logger.warning(f"Error during partition assignment poll: {msg.error()}")
             except Exception as poll_error:
                 logger.warning(f"Error during partition assignment poll: {poll_error}")
                 return
                 
-            # Small async sleep to not block event loop
             await asyncio.sleep(0.1)
         
-        # Now that partitions are assigned, seek to end
+        # Now seek to end
         try:
-            assigned_partitions = self.consumer.assignment()
-            logger.info(f"Partitions assigned for topic '{self.topic}': {assigned_partitions}")
+            assignment = self.consumer.assignment()
+            logger.info(f"Partitions assigned for topic '{self.topic}': {assignment}")
             
-            if assigned_partitions:
-                self.consumer.seek_to_end()  # Seek to end of all assigned partitions
+            if assignment:
+                # Get high water marks and seek to end
+                for tp in assignment:
+                    high_offset = self.consumer.get_watermark_offsets(tp)[1]
+                    tp.offset = high_offset
+                    self.consumer.seek(tp)
                 logger.info(f"Successfully seeked to end of all partitions for topic '{self.topic}'")
-            else:
-                logger.warning(f"No partitions assigned for topic '{self.topic}'")
-                
+                    
         except Exception as seek_error:
             logger.error(f"Error seeking to end for topic '{self.topic}': {seek_error}")
-            # Don't fail consumer creation for seek errors, just log and continue
     
     async def _check_consumer_health(self):
         """Periodically check consumer health."""
@@ -553,23 +480,31 @@ class AsyncResilientKafkaConsumer:
         Consume messages with automatic reconnection on failures.
         
         Args:
-            message_handler: Async or sync function to process messages
+            message_handler: Async or sync function to process MessageWrapper objects
             commit_offset: Whether to commit offsets after successful processing
-            batch_processing: If True, handler receives entire message batch instead of individual messages
+            batch_processing: If True, handler receives list of MessageWrapper objects instead of individual messages
+            
+        Note:
+            The message handler receives MessageWrapper objects that contain:
+            - 'message': The original confluent_kafka.Message object
+            - 'parsed_value': The JSON-decoded message value
+            - All other attributes are delegated to the original message
         """
         if not self.consumer:
             if not await self._create_consumer():
+                logger.error(f"Failed to create consumer for topic '{self.topic}'")
                 return
         
         self._running = True
         logger.info(f"AsyncResilientKafkaConsumer started for topic '{self.topic}'")
         
         consecutive_empty_polls = 0
-        max_consecutive_empty_polls = 60  # 1 minute of empty polls (reduced from 300/5 minutes)
+        max_consecutive_empty_polls = 60  # 1 minute of empty polls
+        message_batch = []
         
         while self._running and not self._stop_event.is_set():
             try:
-                # Ensure consumer is available before proceeding
+                # Ensure consumer is available
                 if not self.consumer:
                     logger.warning(f"Consumer is None for topic '{self.topic}', attempting to recreate...")
                     if not await self._create_consumer():
@@ -580,115 +515,114 @@ class AsyncResilientKafkaConsumer:
                 # Periodic health check
                 await self._check_consumer_health()
                 
-                # Use safe polling (now raises exceptions for reconnection)
-                message_batch = safe_kafka_poll(self.consumer, timeout_ms=1000)
+                # Poll for message
+                msg = safe_kafka_poll(self.consumer, timeout=1.0)
                 
-                if message_batch:
-                    consecutive_empty_polls = 0  # Reset counter on successful poll
-                    if batch_processing:
-                        # Process entire batch at once
+                if msg:
+                    consecutive_empty_polls = 0
+                    
+                    # Process message using confluent_kafka's native message object
+                    try:
+                        # Parse JSON value if present
+                        msg_value = msg.value()
+                        if msg_value is not None:
+                            if isinstance(msg_value, bytes):
+                                parsed_value = json.loads(msg_value.decode('utf-8'))
+                            else:
+                                parsed_value = json.loads(msg_value)
+                        else:
+                            parsed_value = None
+                        
+                        # Create a simple wrapper that contains both the message and parsed value
+                        class MessageWrapper:
+                            def __init__(self, message, parsed_value):
+                                self.message = message
+                                self.parsed_value = parsed_value
+                                
+                            # Delegate all other attributes to the original message
+                            def __getattr__(self, name):
+                                return getattr(self.message, name)
+                        
+                        wrapped_msg = MessageWrapper(msg, parsed_value)
+                        
+                        if batch_processing:
+                            message_batch.append(wrapped_msg)
+                            # Process batch when it reaches a certain size or timeout
+                            if len(message_batch) >= 10:  # Process every 10 messages
+                                try:
+                                    if asyncio.iscoroutinefunction(message_handler):
+                                        success = await message_handler(message_batch)
+                                    else:
+                                        success = message_handler(message_batch)
+                                    
+                                    if success and commit_offset:
+                                        # Commit the last message in batch (use original message for commit)
+                                        if not safe_kafka_commit(self.consumer, message=msg):
+                                            logger.warning("Failed to commit batch offsets")
+                                    
+                                    message_batch.clear()
+                                except Exception as e:
+                                    logger.error(f"Error processing message batch: {e}")
+                                    if self.on_error_callback:
+                                        if asyncio.iscoroutinefunction(self.on_error_callback):
+                                            await self.on_error_callback(e, message_batch)
+                                        else:
+                                            self.on_error_callback(e, message_batch)
+                                    message_batch.clear()
+                        else:
+                            # Process individual message
+                            try:
+                                if asyncio.iscoroutinefunction(message_handler):
+                                    success = await message_handler(wrapped_msg)
+                                else:
+                                    success = message_handler(wrapped_msg)
+                                
+                                if success and commit_offset:
+                                    # Use original message for commit
+                                    if not safe_kafka_commit(self.consumer, message=msg):
+                                        logger.warning("Failed to commit message offset")
+                                        await self._handle_consumer_error("Commit failure detected")
+                                        continue
+                                        
+                            except Exception as e:
+                                logger.error(f"Error processing message at offset {msg.offset()}: {e}")
+                                if self.on_error_callback:
+                                    if asyncio.iscoroutinefunction(self.on_error_callback):
+                                        await self.on_error_callback(e, wrapped_msg)
+                                    else:
+                                        self.on_error_callback(e, wrapped_msg)
+                                        
+                    except json.JSONDecodeError as e:
+                        logger.error(f"Failed to deserialize message at offset {msg.offset()}: {e}")
+                        continue
+                        
+                else:
+                    # No message received
+                    consecutive_empty_polls += 1
+                    
+                    # Process any remaining batch messages on timeout
+                    if batch_processing and message_batch and consecutive_empty_polls % 10 == 0:
                         try:
                             if asyncio.iscoroutinefunction(message_handler):
                                 success = await message_handler(message_batch)
                             else:
                                 success = message_handler(message_batch)
-                            
-                            # Commit all offsets if successful
-                            if success and commit_offset:
-                                if not safe_kafka_commit(self.consumer):
-                                    logger.warning(f"Failed to commit batch offsets")
-                                    
+                            message_batch.clear()
                         except Exception as e:
-                            logger.error(f"Error processing message batch: {e}")
-                            if self.on_error_callback:
-                                if asyncio.iscoroutinefunction(self.on_error_callback):
-                                    await self.on_error_callback(e, message_batch)
-                                else:
-                                    self.on_error_callback(e, message_batch)
-                    else:
-                        # Process messages individually with batch-level commits
-                        commit_needed = False
-                        batch_failed = False
-                        
-                        for topic_partition, messages in message_batch.items():
-                            if batch_failed:
-                                break  # Stop processing if batch has failed
-                                
-                            logger.debug(f"Processing batch of {len(messages)} messages for {topic_partition.topic} partition {topic_partition.partition}")
-                            
-                            for message in messages:
-                                if not self._running:
-                                    batch_failed = True
-                                    break  # Stop processing if service is stopping
-                                    
-                                try:
-                                    # Process the message (support both sync and async handlers)
-                                    if asyncio.iscoroutinefunction(message_handler):
-                                        success = await message_handler(message)
-                                    else:
-                                        success = message_handler(message)
-                                    
-                                    if success:
-                                        commit_needed = True  # Mark that we need to commit after the batch
-                                    elif success is False:
-                                        # Handler explicitly returned False, don't commit batch
-                                        logger.warning(f"Message handler returned False for message at {message.offset}, not committing batch")
-                                        commit_needed = False
-                                        batch_failed = True
-                                        break  # Stop processing this batch
-                                    # If success is None, continue processing (neutral result)
-                                        
-                                except Exception as e:
-                                    logger.error(f"Error processing message at offset {message.offset}: {e}")
-                                    if self.on_error_callback:
-                                        if asyncio.iscoroutinefunction(self.on_error_callback):
-                                            await self.on_error_callback(e, message)
-                                        else:
-                                            self.on_error_callback(e, message)
-                                    
-                                    # Processing error - don't commit batch
-                                    commit_needed = False
-                                    batch_failed = True
-                                    break  # Stop processing this batch
-                            
-                            if batch_failed:
-                                break  # Exit outer loop if batch processing failed
-                        
-                        # Commit offsets ONLY if all messages in the batch were processed successfully
-                        if commit_needed and commit_offset and self._running and not batch_failed:
-                            try:
-                                logger.debug("Committing Kafka offsets for processed batch...")
-                                if not safe_kafka_commit(self.consumer):
-                                    logger.warning("Failed to commit offsets for processed batch - triggering reconnection")
-                                    # Commit failure indicates consumer is in bad state, trigger reconnection
-                                    await self._handle_consumer_error("Commit failure detected")
-                                    continue  # Skip to next iteration after error handling
-                                else:
-                                    logger.debug("Batch offsets committed successfully")
-                            except Exception as commit_err:
-                                logger.error(f"Error committing batch offsets: {commit_err}")
-                                # Any commit exception should trigger reconnection
-                                await self._handle_consumer_error(f"Commit exception: {commit_err}")
-                                continue  # Skip to next iteration after error handling
-                        elif batch_failed:
-                            logger.warning("Batch processing failed, offsets not committed. Messages may be reprocessed.")
-                else:
-                    # No messages, increment counter and check for potential connection issues
-                    consecutive_empty_polls += 1
+                            logger.error(f"Error processing timeout batch: {e}")
+                            message_batch.clear()
                     
-                    # If we've had too many consecutive empty polls, force a health check
                     if consecutive_empty_polls >= max_consecutive_empty_polls:
                         logger.warning(f"No messages received for {max_consecutive_empty_polls} consecutive polls, forcing health check")
                         if not is_consumer_healthy(self.consumer):
                             logger.warning("Consumer health check failed after consecutive empty polls, triggering reconnection")
                             await self._handle_consumer_error("Consumer unhealthy after consecutive empty polls")
                             continue
-                        consecutive_empty_polls = 0  # Reset counter after health check
+                        consecutive_empty_polls = 0
                     
-                    # Sleep briefly
                     await asyncio.sleep(0.1)
                                 
-            except (KafkaError, KafkaTimeoutError) as e:
+            except KafkaException as e:
                 logger.error(f"Kafka error in consumer loop for topic '{self.topic}': {e}")
                 await self._handle_consumer_error(str(e))
                 
@@ -728,10 +662,9 @@ class AsyncResilientKafkaConsumer:
         logger.info(f"Attempting to recreate consumer (attempt {self.retry_count})...")
         if await self._create_consumer():
             logger.info(f"Successfully recreated consumer after error (attempt {self.retry_count})")
-            self.retry_count = 0  # Reset retry count on successful recreation
+            self.retry_count = 0
         else:
             logger.error(f"Failed to recreate consumer on attempt {self.retry_count}")
-            # The retry will happen on the next iteration of the main loop
     
     async def stop(self):
         """Stop the consumer gracefully."""
@@ -751,33 +684,31 @@ class AsyncResilientKafkaConsumer:
         """Check if the consumer is healthy."""
         return self.consumer is not None and self.last_error is None and is_consumer_healthy(self.consumer)
 
-
-def publish_message(producer: KafkaProducer, topic: str, value: dict, key: str = None):
+def publish_message(producer: Producer, topic: str, value: dict, key: str = None):
     """Publishes a message to a Kafka topic with enhanced error handling."""
     try:
         # Convert Pydantic models to dict if needed
         if hasattr(value, '__dict__') and hasattr(value, 'model_dump'):
-            # This is likely a Pydantic model
             value = model_to_dict(value)
 
+        # Serialize value to JSON
+        value_bytes = json.dumps(value, cls=DateTimeEncoder).encode('utf-8')
         key_bytes = key.encode('utf-8') if key else None
-        future = producer.send(topic, value=value, key=key_bytes)
         
-        # Wait for the message to be sent with timeout
-        try:
-            record_metadata = future.get(timeout=10)
-            logger.debug(f"Published message to Kafka topic '{topic}', partition {record_metadata.partition}, offset {record_metadata.offset}")
-        except Exception as e:
-            logger.warning(f"Failed to get send confirmation for topic '{topic}': {e}")
-            # Still flush to ensure message is sent
-            producer.flush(timeout=5)
-            logger.debug(f"Flushed message to Kafka topic '{topic}' with key '{key}'")
-
-    except KafkaError as e:
-        logger.error(f"Failed to send message to Kafka topic '{topic}': {e}")
-        raise
+        # Produce message with callback
+        def delivery_report(err, msg):
+            if err is not None:
+                logger.error(f'Message delivery failed for topic {topic}: {err}')
+            else:
+                logger.debug(f'Message delivered to {msg.topic()} [{msg.partition()}] at offset {msg.offset()}')
+        
+        producer.produce(topic, value=value_bytes, key=key_bytes, callback=delivery_report)
+        
+        # Trigger delivery (non-blocking)
+        producer.poll(0)
+        
     except Exception as e:
-        logger.exception(f"Unexpected error publishing to Kafka topic '{topic}': {e}")
+        logger.error(f"Failed to send message to Kafka topic '{topic}': {e}")
         raise
 
 def check_kafka_health(bootstrap_servers):
@@ -787,15 +718,12 @@ def check_kafka_health(bootstrap_servers):
         if not validated_servers:
             return False, "No reachable Kafka brokers found"
         
-        # Try to create a temporary consumer to test connectivity
-        config = get_optimized_consumer_config("health_check_group", consumer_timeout_ms=5000)
-        config['bootstrap_servers'] = validated_servers.split(',')
+        # Create admin client to test connectivity
+        admin_config = {'bootstrap.servers': validated_servers}
+        admin_client = AdminClient(admin_config)
         
-        test_consumer = KafkaConsumer(**config)
-        
-        # Get metadata to verify connection
-        topics = test_consumer.topics()
-        test_consumer.close()
+        # Get cluster metadata
+        metadata = admin_client.list_topics(timeout=10)
         
         return True, f"Successfully connected to Kafka brokers: {validated_servers}"
         
@@ -809,36 +737,31 @@ def get_kafka_cluster_info(bootstrap_servers):
         if not validated_servers:
             return None
         
-        config = get_optimized_consumer_config("cluster_info_group", consumer_timeout_ms=5000)
-        config['bootstrap_servers'] = validated_servers.split(',')
+        admin_config = {'bootstrap.servers': validated_servers}
+        admin_client = AdminClient(admin_config)
         
-        test_consumer = KafkaConsumer(**config)
+        # Get cluster metadata
+        metadata = admin_client.list_topics(timeout=10)
         
         cluster_info = {
             'bootstrap_servers': validated_servers,
-            'topics': list(test_consumer.topics()),
+            'topics': list(metadata.topics.keys()),
             'partitions': {},
-            'consumer_groups': []
+            'brokers': []
         }
         
         # Get partition information for each topic
-        for topic in cluster_info['topics']:
-            try:
-                partitions = test_consumer.partitions_for_topic(topic)
-                cluster_info['partitions'][topic] = list(partitions) if partitions else []
-            except Exception as e:
-                logger.warning(f"Could not get partitions for topic {topic}: {e}")
-                cluster_info['partitions'][topic] = []
+        for topic_name, topic_metadata in metadata.topics.items():
+            cluster_info['partitions'][topic_name] = list(topic_metadata.partitions.keys())
         
-        # Get consumer group information
-        try:
-            # Note: list_consumer_groups() is not available in this kafka-python version
-            # Leaving empty for now as this is optional cluster info
-            cluster_info['consumer_groups'] = []
-        except Exception as e:
-            logger.warning(f"Could not get consumer groups: {e}")
+        # Get broker information
+        for broker_id, broker_metadata in metadata.brokers.items():
+            cluster_info['brokers'].append({
+                'id': broker_id,
+                'host': broker_metadata.host,
+                'port': broker_metadata.port
+            })
         
-        test_consumer.close()
         return cluster_info
         
     except Exception as e:

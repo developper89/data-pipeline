@@ -196,7 +196,7 @@ class ProprietaryTranslator(BaseTranslator):
                 if device_id:
                     # Apply validation if configured
                     if self._validate_device_id(device_id, source):
-                        logger.info(f"Successfully extracted device ID '{device_id}' using source {i+1} ({source_type})")
+                        logger.debug(f"Successfully extracted device ID '{device_id}' using source {i+1} ({source_type})")
                         return TranslationResult(
                             success=True,
                             device_id=device_id,

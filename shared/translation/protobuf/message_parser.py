@@ -94,7 +94,7 @@ class ProtobufMessageParser:
         for message_type, proto_info in self.proto_modules.items():
             logger.debug(f"Trying to parse as {message_type}...")
             if self._try_parse_message(payload, proto_info, message_type):
-                logger.info(f"Successfully detected message type: {message_type}")
+                logger.debug(f"Successfully detected message type: {message_type}")
                 return message_type
             else:
                 logger.debug(f"Failed to parse as {message_type}")
@@ -112,7 +112,7 @@ class ProtobufMessageParser:
             proto_info = self.proto_modules[message_type]
             message = proto_info['class']()
             message.ParseFromString(payload)
-            logger.info(f"Successfully parsed {message_type} message")
+            logger.debug(f"Successfully parsed {message_type} message")
             
             # Log available fields for debugging
             if hasattr(message, 'DESCRIPTOR'):
@@ -149,7 +149,7 @@ class ProtobufMessageParser:
             # Successfully parsed - create and return the parsed message
             message = proto_info['class']()
             message.ParseFromString(payload)
-            logger.info(f"Successfully parsed as {target_message_type} message")
+            logger.debug(f"Successfully parsed as {target_message_type} message")
             
             # Log available fields for debugging
             if hasattr(message, 'DESCRIPTOR'):

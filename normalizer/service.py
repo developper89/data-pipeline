@@ -7,8 +7,8 @@ import signal
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 
-from kafka import KafkaConsumer
-from kafka.errors import KafkaError
+# Updated to use confluent-kafka through shared helpers
+from confluent_kafka import KafkaError, KafkaException
 from pydantic import ValidationError
 
 # Import shared helpers, models, and local components
@@ -101,17 +101,31 @@ class NormalizerService:
         # Debug data collection
         self.debug_data: List[Dict[str, Any]] = []
         self.debug_file_path = "/app/normalizer/debug_messages.json"
+        
+        # Translator instance cache to avoid recreating translators for each message
+        self.translator_cache: Dict[str, Any] = {}
 
     async def _process_message(self, raw_msg_record) -> bool:
         """
         Processes a single raw message from Kafka.
         Returns True if processing (or error publishing) was successful, False otherwise.
         """
-        msg_value = raw_msg_record.value  # Deserialized by KafkaConsumer
-        msg_key = raw_msg_record.key.decode("utf-8") if raw_msg_record.key else None
-        topic = raw_msg_record.topic
-        partition = raw_msg_record.partition
-        offset = raw_msg_record.offset
+        # Use the parsed_value from MessageWrapper (already deserialized JSON)
+        msg_value = raw_msg_record.parsed_value
+        
+        # Handle key properly - it might be bytes or string
+        msg_key = None
+        if raw_msg_record.key():
+            key_data = raw_msg_record.key()
+            if isinstance(key_data, bytes):
+                msg_key = key_data.decode("utf-8")
+            else:
+                msg_key = key_data
+        
+        # Get topic, partition, offset from confluent_kafka methods
+        topic = raw_msg_record.topic()
+        partition = raw_msg_record.partition()
+        offset = raw_msg_record.offset()
 
         # logger.info(f"Processing msg from {topic=}, {partition=}, {offset=}, {msg_key=}")
 
@@ -199,7 +213,7 @@ class NormalizerService:
                     logger.debug(f"[{request_id}] No script module available for device {raw_message.device_id}")
                     return True  # Indicate error was handled
                     
-                logger.info(f"[{request_id}] Successfully loaded script module for device {raw_message.device_id}")
+                logger.debug(f"[{request_id}] Successfully loaded script module for device {raw_message.device_id}")
 
             except Exception as e:  # Catch configuration errors
                 logger.exception(f"[{request_id}] Error getting script module for {raw_message.device_id}: {e}")
@@ -430,7 +444,7 @@ class NormalizerService:
                     )
                 return True  # Success!
 
-            except (KafkaError, Exception) as pub_err:
+            except (KafkaException, Exception) as pub_err:
                 # Error is logged within the publish_standardized_data method now
                 # We just need to react to the failure
                 logger.error(
@@ -482,7 +496,7 @@ class NormalizerService:
         try:
                 
             # Now get datatypes using the sensor's ID
-            logger.info(f"[{request_id}] Found sensor with ID {sensor.id} for parameter {sensor.parameter}")
+            logger.debug(f"[{request_id}] Found sensor with ID {sensor.id} for parameter {sensor.parameter}")
             datatypes = await self.datatype_repository.get_sensor_datatypes_ordered(sensor.id)
             
             # Create a map of datatype_index -> datatype
@@ -557,6 +571,7 @@ class NormalizerService:
     async def _initialize_translator(self, raw_message: RawMessage, request_id: Optional[str] = None):
         """
         Initialize translator instance based on raw message metadata.
+        Uses caching to reuse translator instances instead of creating new ones for each message.
         
         Args:
             raw_message: The raw message containing metadata with translator_used
@@ -574,7 +589,15 @@ class NormalizerService:
                 logger.warning(f"[{request_id}] No translator_used found in metadata for device {raw_message.device_id}")
                 return None
             
-            logger.debug(f"[{request_id}] Initializing translator '{translator_used}' for protocol '{protocol}'")
+            # Create cache key based on translator_used and protocol
+            cache_key = f"{protocol}_{translator_used}"
+            
+            # Check if translator is already cached
+            if cache_key in self.translator_cache:
+                logger.debug(f"[{request_id}] Using cached translator '{translator_used}' for protocol '{protocol}'")
+                return self.translator_cache[cache_key]
+            
+            logger.debug(f"[{request_id}] Initializing new translator '{translator_used}' for protocol '{protocol}'")
             
             # Determine connector ID based on protocol
             connector_id = f"{protocol}-connector"
@@ -608,7 +631,9 @@ class NormalizerService:
             translator_instance = TranslatorFactory.create_translator(matching_config)
             
             if translator_instance:
-                logger.debug(f"[{request_id}] Successfully initialized translator '{translator_used}'")
+                # Cache the translator instance for future use
+                self.translator_cache[cache_key] = translator_instance
+                logger.info(f"[{request_id}] Successfully initialized and cached translator '{translator_used}'")
                 return translator_instance
             else:
                 logger.error(f"[{request_id}] Failed to create translator instance for '{translator_used}'")
@@ -617,6 +642,24 @@ class NormalizerService:
         except Exception as e:
             logger.exception(f"[{request_id}] Error initializing translator: {e}")
             return None
+
+    def clear_translator_cache(self, cache_key: Optional[str] = None):
+        """
+        Clear translator cache - either specific translator or all cached translators.
+        
+        Args:
+            cache_key: Optional specific cache key to clear. If None, clears all cached translators.
+        """
+        if cache_key:
+            if cache_key in self.translator_cache:
+                del self.translator_cache[cache_key]
+                logger.info(f"Cleared cached translator: {cache_key}")
+            else:
+                logger.warning(f"Cache key not found: {cache_key}")
+        else:
+            cache_size = len(self.translator_cache)
+            self.translator_cache.clear()
+            logger.info(f"Cleared all cached translators (was {cache_size} translators)")
 
     async def _save_debug_data(self):
         """
@@ -720,7 +763,7 @@ class NormalizerService:
             )
 
             # Call the wrapper method to publish
-            # This might raise KafkaError or other exceptions if publishing fails
+            # This might raise KafkaException or other exceptions if publishing fails
             self.kafka_producer.publish_error(error_msg)
             # Debug logging occurs within the wrapper's method now
 

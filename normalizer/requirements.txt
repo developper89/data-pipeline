@@ -1,4 +1,4 @@
-kafka-python==2.2.15
+confluent-kafka==2.11.0
 python-dotenv==1.1.0
 sqlalchemy[asyncio]
 asyncpg==0.30.0

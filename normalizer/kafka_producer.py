@@ -2,11 +2,10 @@
 import logging
 from typing import Optional
 
-from kafka import KafkaProducer
-from kafka.errors import KafkaError
+from confluent_kafka import Producer, KafkaError, KafkaException
 
 # Import shared components
-from shared.mq.kafka_helpers import publish_message # Use the generic helper
+from shared.mq.kafka_helpers import publish_message, create_kafka_producer
 from shared.models.common import ErrorMessage, ValidatedOutput, AlertMessage, AlarmMessage
 
 # Import local config
@@ -16,17 +15,32 @@ logger = logging.getLogger(__name__)
 
 class NormalizerKafkaProducer:
     """
-    A wrapper around KafkaProducer specifically for the Normalizer Service.
+    A wrapper around confluent-kafka Producer specifically for the Normalizer Service.
     Handles publishing ValidatedOutput and ErrorMessage to the correct topics.
     """
-    def __init__(self, producer: KafkaProducer):
+    def __init__(self, producer: Producer):
         """
-        Initializes the wrapper with a pre-configured KafkaProducer instance.
+        Initializes the wrapper with a pre-configured Producer instance.
         """
-        if not isinstance(producer, KafkaProducer):
-            raise TypeError("Producer must be an instance of kafka.KafkaProducer")
+        if not isinstance(producer, Producer):
+            raise TypeError("Producer must be an instance of confluent_kafka.Producer")
         self.producer = producer
         logger.info("NormalizerKafkaProducer initialized.")
+
+    @classmethod
+    def create(cls, bootstrap_servers: str, **config_overrides):
+        """
+        Create a NormalizerKafkaProducer with a new Producer instance.
+        
+        Args:
+            bootstrap_servers: Kafka bootstrap servers
+            **config_overrides: Additional producer configuration
+            
+        Returns:
+            NormalizerKafkaProducer instance
+        """
+        producer = create_kafka_producer(bootstrap_servers, **config_overrides)
+        return cls(producer)
 
     def publish_validated_data(self, message: ValidatedOutput):
         """
@@ -36,7 +50,7 @@ class NormalizerKafkaProducer:
             message: The ValidatedOutput object to publish.
 
         Raises:
-            KafkaError: If publishing fails due to Kafka-related issues.
+            KafkaException: If publishing fails due to Kafka-related issues.
             Exception: For other unexpected publishing errors.
         """
         if not isinstance(message, ValidatedOutput):
@@ -46,17 +60,17 @@ class NormalizerKafkaProducer:
             # Use device_id as the key for partitioning validated data
             key = message.device_id
             topic = config.KAFKA_VALIDATED_DATA_TOPIC
-            value = message.model_dump() # Convert Pydantic model to dict
+            value = message.model_dump()  # Convert Pydantic model to dict
 
-            logger.debug(f"[{message.request_id}] Publishing ValidatedOutput to topic '{topic}' with key '{key}'")
+            logger.debug(f"Publishing validated data for device {message.device_id} (req: {message.request_id}) to topic '{topic}'")
             publish_message(self.producer, topic, value, key)
-            # publish_message helper already logs success/failure at debug/error level
-        except KafkaError as e:
+
+        except KafkaException as e:
             logger.error(f"[{message.request_id}] Failed to publish ValidatedOutput to Kafka topic '{topic}': {e}")
-            raise # Re-raise Kafka specific errors for caller to handle
+            raise
         except Exception as e:
             logger.exception(f"[{message.request_id}] Unexpected error publishing ValidatedOutput to Kafka topic '{topic}': {e}")
-            raise # Re-raise other errors
+            raise
 
     def publish_error(self, message: ErrorMessage):
         """
@@ -66,7 +80,7 @@ class NormalizerKafkaProducer:
             message: The ErrorMessage object to publish.
 
         Raises:
-            KafkaError: If publishing fails due to Kafka-related issues.
+            KafkaException: If publishing fails due to Kafka-related issues.
             Exception: For other unexpected publishing errors.
         """
         if not isinstance(message, ErrorMessage):
@@ -74,107 +88,131 @@ class NormalizerKafkaProducer:
 
         if not config.KAFKA_ERROR_TOPIC:
             logger.warning(f"[{message.request_id}] KAFKA_ERROR_TOPIC not configured. Skipping error publication.")
-            return # Don't raise an error, just skip if not configured
+            return
 
         try:
-            # Use request_id as the key for partitioning errors, if available
             key = message.request_id
             topic = config.KAFKA_ERROR_TOPIC
             value = message.model_dump()
 
             logger.debug(f"[{message.request_id}] Publishing ErrorMessage to topic '{topic}' with key '{key}'")
             publish_message(self.producer, topic, value, key)
-        except KafkaError as e:
+
+        except KafkaException as e:
             logger.error(f"[{message.request_id}] Failed to publish ErrorMessage to Kafka topic '{topic}': {e}")
-            raise # Re-raise Kafka specific errors
+            raise
         except Exception as e:
             logger.exception(f"[{message.request_id}] Unexpected error publishing ErrorMessage to Kafka topic '{topic}': {e}")
-            raise # Re-raise other errors
+            raise
 
     def publish_alert(self, message: AlertMessage):
         """
-        Publishes an AlertMessage to the configured alerts topic.
+        Publishes an AlertMessage to the configured alert topic.
 
         Args:
             message: The AlertMessage object to publish.
 
         Raises:
-            KafkaError: If publishing fails due to Kafka-related issues.
+            KafkaException: If publishing fails due to Kafka-related issues.
             Exception: For other unexpected publishing errors.
         """
         if not isinstance(message, AlertMessage):
             raise TypeError("Message must be an instance of AlertMessage")
 
-        if not config.KAFKA_ALERTS_TOPIC:
-            logger.warning(f"[{message.request_id}] KAFKA_ALERTS_TOPIC not configured. Skipping alert publication.")
-            return # Don't raise an error, just skip if not configured
+        if not config.KAFKA_ALERT_TOPIC:
+            logger.warning(f"[{message.request_id}] KAFKA_ALERT_TOPIC not configured. Skipping alert publication.")
+            return
 
         try:
-            # Use sensor_id as the key for partitioning alerts
-            key = message.sensor_id
-            topic = config.KAFKA_ALERTS_TOPIC
+            key = message.device_id
+            topic = config.KAFKA_ALERT_TOPIC
             value = message.model_dump()
 
             logger.debug(f"[{message.request_id}] Publishing AlertMessage to topic '{topic}' with key '{key}'")
             publish_message(self.producer, topic, value, key)
-            logger.info(f"[{message.request_id}] Successfully published alert {message.id} for alarm '{message.name}' to topic '{topic}'")
-        except KafkaError as e:
+
+        except KafkaException as e:
             logger.error(f"[{message.request_id}] Failed to publish AlertMessage to Kafka topic '{topic}': {e}")
-            raise # Re-raise Kafka specific errors
+            raise
         except Exception as e:
             logger.exception(f"[{message.request_id}] Unexpected error publishing AlertMessage to Kafka topic '{topic}': {e}")
-            raise # Re-raise other errors
+            raise
 
     def publish_alarm(self, message: AlarmMessage):
         """
-        Publishes an AlarmMessage to the configured alarms topic.
+        Publishes an AlarmMessage to the configured alarm topic.
 
         Args:
             message: The AlarmMessage object to publish.
 
         Raises:
-            KafkaError: If publishing fails due to Kafka-related issues.
+            KafkaException: If publishing fails due to Kafka-related issues.
             Exception: For other unexpected publishing errors.
         """
         if not isinstance(message, AlarmMessage):
             raise TypeError("Message must be an instance of AlarmMessage")
 
-        if not config.KAFKA_DEVICE_COMMANDS_TOPIC:
-            logger.warning(f"[{message.request_id}] KAFKA_DEVICE_COMMANDS_TOPIC not configured. Skipping alarm publication.")
-            return # Don't raise an error, just skip if not configured
+        if not config.KAFKA_ALARM_TOPIC:
+            logger.warning(f"[{message.request_id}] KAFKA_ALARM_TOPIC not configured. Skipping alarm publication.")
+            return
 
         try:
-            # Use alarm id as the key for partitioning alarms
-            key = message.id
-            topic = config.KAFKA_DEVICE_COMMANDS_TOPIC
+            key = message.device_id
+            topic = config.KAFKA_ALARM_TOPIC
             value = message.model_dump()
 
             logger.debug(f"[{message.request_id}] Publishing AlarmMessage to topic '{topic}' with key '{key}'")
             publish_message(self.producer, topic, value, key)
-            logger.info(f"[{message.request_id}] Successfully published alarm {message.id} '{message.name}' to topic '{topic}'")
-        except KafkaError as e:
+
+        except KafkaException as e:
             logger.error(f"[{message.request_id}] Failed to publish AlarmMessage to Kafka topic '{topic}': {e}")
-            raise # Re-raise Kafka specific errors
+            raise
         except Exception as e:
             logger.exception(f"[{message.request_id}] Unexpected error publishing AlarmMessage to Kafka topic '{topic}': {e}")
-            raise # Re-raise other errors
+            raise
+
+    def flush(self, timeout: Optional[float] = None):
+        """
+        Wait for all messages in the Producer queue to be delivered.
+        
+        Args:
+            timeout: Maximum time to wait in seconds
+            
+        Returns:
+            Number of messages still in queue
+        """
+        if self.producer:
+            try:
+                remaining = self.producer.flush(timeout or 30.0)
+                if remaining > 0:
+                    logger.warning(f"Producer flush completed with {remaining} messages still in queue")
+                else:
+                    logger.debug("Producer flush completed successfully")
+                return remaining
+            except Exception as e:
+                logger.error(f"Error during producer flush: {e}")
+                return -1
+        return 0
 
     def close(self, timeout: Optional[float] = None):
         """
-        Closes the underlying KafkaProducer.
+        Closes the underlying Producer.
 
         Args:
             timeout: The maximum time to wait for buffered messages to be sent.
         """
         if self.producer:
-            logger.info(f"Closing NormalizerKafkaProducer's underlying KafkaProducer (timeout={timeout}s)...")
+            logger.info(f"Closing NormalizerKafkaProducer's underlying Producer (timeout={timeout}s)...")
             try:
-                self.producer.close(timeout=timeout)
-                logger.info("Underlying KafkaProducer closed successfully.")
+                # Flush any remaining messages before closing
+                remaining = self.producer.flush(timeout or 30.0)
+                if remaining > 0:
+                    logger.warning(f"Producer closed with {remaining} messages still in queue")
+                
+                logger.info("Underlying Producer closed successfully.")
             except Exception as e:
-                 logger.error(f"Error closing underlying KafkaProducer: {e}", exc_info=True)
+                logger.error(f"Error closing underlying Producer: {e}", exc_info=True)
             finally:
-                 # Avoid reusing a closed producer instance
-                 self.producer = None
+                self.producer = None
         else:
             logger.warning("Attempted to close NormalizerKafkaProducer, but no active producer found.")

@@ -37,7 +37,7 @@ class CommandConsumer:
         # Initialize resilient consumer
         self.resilient_consumer = AsyncResilientKafkaConsumer(
             topic=config.KAFKA_DEVICE_COMMANDS_TOPIC,
-            group_id=f"{config.MQTT_CLIENT_ID}_command_consumer",
+            group_id="iot_command_consumer_mqtt",
             bootstrap_servers=config.KAFKA_BOOTSTRAP_SERVERS,
             auto_offset_reset='latest',  # Only consume new messages
             on_error_callback=self._on_consumer_error
@@ -104,7 +104,7 @@ class CommandConsumer:
         """
         try:
             # Process the command
-            success = await self._process_command(message.value)
+            success = await self._process_command(message.parsed_value)
             return success
             
         except Exception as e:

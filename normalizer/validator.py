@@ -64,7 +64,7 @@ class Validator:
                 standardized_data.display_names, [datatype.name] * len(values)
             )
             datatype.display_names = processed_display_names
-            logger.info(f"Updated display names for datatype {datatype.id}: {processed_display_names}")
+            logger.debug(f"Updated display names for datatype {datatype.id}: {processed_display_names}")
         # else:
         #     datatype.display_names = [datatype.name] * len(values)
         #     logger.info(f"Used existing display name for datatype {datatype.id}: {datatype.name}")
@@ -160,6 +160,11 @@ class Validator:
                 filtered_datatype_display_names = [datatype.display_names[i] for i in valid_indices] if datatype.display_names else []
                 filtered_datatype_units = [datatype.unit[i] for i in valid_indices] if datatype.unit else []
                 filtered_datatype_persist = [datatype.persist[i] for i in valid_indices] if datatype.persist else []
+                filtered_datatype_min = [datatype.min[i] for i in valid_indices] if datatype.min else []
+                filtered_datatype_max = [datatype.max[i] for i in valid_indices] if datatype.max else []
+                filtered_datatype_data_type = [datatype.data_type[i] for i in valid_indices] if datatype.data_type else []
+                filtered_datatype_possible_values = [datatype.possible_values[i] for i in valid_indices] if datatype.possible_values else []
+                filtered_datatype_description = [datatype.description[i] for i in valid_indices] if datatype.description else []
                 
                 # Create a filtered standardized_data object for building the validated output
                 filtered_standardized_data = StandardizedOutput(
@@ -183,6 +188,11 @@ class Validator:
                 filtered_datatype.display_names = filtered_datatype_display_names
                 filtered_datatype.unit = filtered_datatype_units
                 filtered_datatype.persist = filtered_datatype_persist
+                filtered_datatype.min = filtered_datatype_min
+                filtered_datatype.max = filtered_datatype_max
+                filtered_datatype.data_type = filtered_datatype_data_type
+                filtered_datatype.possible_values = filtered_datatype_possible_values
+                filtered_datatype.description = filtered_datatype_description
                 
                 # Build validated output with filtered data
                 validated_output = self._build_validated_output(
@@ -193,7 +203,10 @@ class Validator:
                     filtered_standardized_data,
                 )
                 
-                logger.info(f"[{request_id}] Partial validation: {len(valid_indices)} out of {len(converted_values)} values passed validation for device {device_id}")
+                # Only log as warning if it's truly partial validation (not all values passed)
+                if len(valid_indices) < len(converted_values):
+                    logger.warning(f"[{request_id}] Partial validation: {len(valid_indices)} out of {len(converted_values)} values passed validation for device {device_id}")
+                
                 return validated_output, errors
         
         # If no valid values found, return None
@@ -344,7 +357,21 @@ class Validator:
             #     updated = True
             #     logger.info(f"Auto-discovery: Updated persist for datatype {datatype.id}: {auto_meta['suggested_persist']}")
             
-            # 7. Set auto_discovery to False after performing discovery
+            # 7. Handle possible_values - use existing first value if available
+            if hasattr(datatype, 'possible_values') and datatype.possible_values and len(datatype.possible_values) > 0:
+                first_possible_values = datatype.possible_values[0]
+                update_data['possible_values'] = [first_possible_values] * num_values
+                updated = True
+                logger.debug(f"Auto-discovery: Used existing first possible_values for datatype {datatype.id}")
+            
+            # 8. Handle description - use existing first value if available
+            if hasattr(datatype, 'description') and datatype.description and len(datatype.description) > 0:
+                first_description = datatype.description[0]
+                update_data['description'] = [first_description] * num_values
+                updated = True
+                logger.debug(f"Auto-discovery: Used existing first description for datatype {datatype.id}")
+            
+            # 9. Set auto_discovery to False after performing discovery
             # update_data['auto_discovery'] = False
             # updated = True
             logger.debug(f"Auto-discovery: Set auto_discovery to False for datatype {datatype.id}")
@@ -505,7 +532,13 @@ class Validator:
                 
             if hasattr(aligned_datatype, 'labels') and aligned_datatype.labels:
                 aligned_datatype.labels = reorder_array(aligned_datatype.labels, "")
-            
+                
+            if hasattr(aligned_datatype, 'possible_values') and aligned_datatype.possible_values:
+                aligned_datatype.possible_values = reorder_array(aligned_datatype.possible_values, [])
+                
+            if hasattr(aligned_datatype, 'description') and aligned_datatype.description:
+                aligned_datatype.description = reorder_array(aligned_datatype.description, "")
+
             # Log successful alignment
             matched_count = len(matched_std_indices)
             total_count = len(std_labels)
@@ -791,6 +824,10 @@ class Validator:
             "datatype_unit": datatype.unit,
             "datatype_type": datatype_type_strings,
             "datatype_category": str(datatype.category),
+            "datatype_possible_values": datatype.possible_values,
+            "datatype_description": datatype.description,
+            "datatype_min": datatype.min,
+            "datatype_max": datatype.max,
             "persist": datatype.persist,
             **standardized_data.metadata,
         }

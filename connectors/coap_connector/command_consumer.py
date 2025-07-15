@@ -6,8 +6,8 @@ import os
 from typing import Dict, Any, Optional, List
 import time
 
-from kafka import KafkaConsumer
-from kafka.errors import KafkaError
+# Remove kafka-python imports - using confluent-kafka through shared helpers
+from confluent_kafka import KafkaError, KafkaException
 
 from shared.mq.kafka_helpers import AsyncResilientKafkaConsumer
 from shared.config_loader import get_translator_configs
@@ -48,7 +48,7 @@ class CommandConsumer:
         # Initialize resilient consumer
         self.resilient_consumer = AsyncResilientKafkaConsumer(
             topic=config.KAFKA_DEVICE_COMMANDS_TOPIC,
-            group_id=f"coap_command_consumer",
+            group_id=f"iot_command_consumer_coap",
             bootstrap_servers=config.KAFKA_BOOTSTRAP_SERVERS,
             auto_offset_reset='latest',  # Only consume new messages
             on_error_callback=self._on_consumer_error
@@ -60,10 +60,14 @@ class CommandConsumer:
         
     async def consume_commands(self):
         """Start consuming command messages using AsyncResilientKafkaConsumer."""
+        logger.info("Starting command consumption")
+        
         if not self.resilient_consumer:
             logger.error("Cannot start consuming: AsyncResilientKafkaConsumer not initialized")
             return
             
+        logger.info(f"Starting consumption for topic '{self.resilient_consumer.topic}' with group '{self.resilient_consumer.group_id}'")
+        
         try:
             # This handles all the complexity: polling, error recovery, reconnection, etc.
             await self.resilient_consumer.consume_messages(
@@ -71,6 +75,7 @@ class CommandConsumer:
                 commit_offset=True,
                 batch_processing=False  # Process commands individually
             )
+            logger.info("Command consumer completed")
         except Exception as e:
             logger.exception(f"Fatal error in command consumer: {e}")
             self.running = False
@@ -87,7 +92,7 @@ class CommandConsumer:
         """
         try:
             # Message value is already deserialized by KafkaConsumer
-            command_data = message.value
+            command_data = message.parsed_value
             
             # Parse message into CommandMessage model
             try:
@@ -97,7 +102,7 @@ class CommandConsumer:
                 else:
                     # If message is already a dict
                     message_data = command_data
-                
+
                 command_message = CommandMessage(**message_data)
                 success = await self._process_command(command_message)
                 return success
@@ -206,10 +211,10 @@ class CommandConsumer:
         """
         try:
             # Get metadata from command message
-            metadata = command_message.metadata or {}
+            metadata = command_message.metadata
             manufacturer = metadata.get('manufacturer')
             command_type = command_message.command_type
-
+            logger.info(f"Formatting command for device {device_id} {command_message.model_dump()}")
             # Get translator instance based on command type and manufacturer
             translator = await self._get_translator_for_device(device_id, command_type, manufacturer)
             if not translator:
@@ -258,8 +263,8 @@ class CommandConsumer:
 
     async def _get_translator_for_device(self, device_id: str, command_type: str = None, manufacturer: str = None):
         """Get translator instance for device based on command type and manufacturer."""
-        cache_key = f"{manufacturer or 'default'}_{command_type or 'default'}_translator"
-
+        cache_key = f"{manufacturer}_translator"
+        logger.info(f"Cache key: {cache_key}")
         if cache_key not in self._translator_cache:
             try:
                 # Get translator configs for coap-connector

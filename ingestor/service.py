@@ -3,8 +3,8 @@ import json
 import asyncio
 from typing import Dict, Any, Optional, List
 import time
-from kafka import KafkaConsumer, KafkaProducer
-from kafka.errors import KafkaError
+# Updated to use confluent-kafka through shared helpers
+from confluent_kafka import KafkaError, KafkaException
 import config
 from influx_writer import InfluxDBWriter
 from data_mapper import DataMapper
@@ -94,7 +94,7 @@ class IngestorService:
         """
         try:
             # Message value is already deserialized by KafkaConsumer
-            data = message.value
+            data = message.parsed_value
             
             request_id = data.get("request_id", generate_request_id())
             

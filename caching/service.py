@@ -1,6 +1,6 @@
 import logging
 import asyncio
-from kafka.errors import KafkaError
+from confluent_kafka import KafkaError, KafkaException
 from shared.models.common import ValidatedOutput, generate_request_id
 from shared.mq.kafka_helpers import AsyncResilientKafkaConsumer
 import config
@@ -109,7 +109,7 @@ class CacheService:
         """
         try:
             # Message value is already deserialized by KafkaConsumer
-            data = message.value
+            data = message.parsed_value
             
             request_id = data.get("request_id", generate_request_id())
             

@@ -13,24 +13,22 @@ import config
 logger = logging.getLogger(__name__)
 
 class CoapGatewayServer:
-    def __init__(self, host: str, port: int, kafka_producer: KafkaMsgProducer): # Updated type hint
+    def __init__(self, host: str, port: int, kafka_producer: KafkaMsgProducer, command_consumer=None):
         self.host = host
         self.port = port
         self.kafka_producer = kafka_producer # Store Kafka producer wrapper
+        self.command_consumer = command_consumer  # Accept command consumer from main
         self.protocol = None
         self._run_task = None
         self._stop_event = asyncio.Event()
-        self.command_consumer = None
         
     async def start(self):
         """Creates the CoAP context and starts the server."""
         logger.info(f"🚀 Starting CoAP Gateway on {self.host}:{self.port}")
         try:
-            # Initialize the command consumer
-            logger.info("📡 Initializing command consumer...")
-            self.command_consumer = CommandConsumer()
-            await self.command_consumer.start()
-            logger.info("✅ Command consumer started")
+            # Command consumer should be passed from main.py
+            if not self.command_consumer:
+                logger.warning("No command consumer provided to CoAP server")
             
             # Create the data resource that will handle both device data and commands
             logger.info("🔧 Creating DataRootResource...")
@@ -55,8 +53,11 @@ class CoapGatewayServer:
             logger.info("🎯 CoAP server ready to accept requests!")
 
             # Keep the server running until stop event is set
+            # Create the task but don't await it yet - let the main loop handle coordination
             self._run_task = asyncio.create_task(self._wait_for_stop())
-            await self._run_task # Wait until stop is called
+            
+            # The server is now set up and running, method should return to allow other tasks to start
+            # The actual waiting will be handled by the main coordination loop
 
         except OSError as e:
              logger.error(f"Failed to bind CoAP server to {self.host}:{self.port}. Error: {e}")

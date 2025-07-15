@@ -5,7 +5,7 @@ import json
 from typing import Dict, Any, List
 import time
 
-from kafka.errors import KafkaError
+from confluent_kafka import KafkaError, KafkaException
 
 from shared.mq.kafka_helpers import AsyncResilientKafkaConsumer, create_kafka_producer
 from email_service import EmailService
@@ -99,7 +99,7 @@ class AlertConsumer:
             self.stats['messages_processed'] += 1
             
             # Message value is already deserialized by KafkaConsumer
-            alert_data = message.value
+            alert_data = message.parsed_value
             
             alert_id = alert_data.get('id', alert_data.get('alert_id', 'unknown'))
             logger.info(f"Processing alert {alert_id}")

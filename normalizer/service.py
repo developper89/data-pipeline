@@ -305,7 +305,7 @@ class NormalizerService:
                             labels=sensor_reading["labels"],
                             display_names=sensor_reading["display_names"],
                             index=sensor_reading["index"],
-                            metadata=sensor_reading["metadata"],
+                            metadata={**sensor_reading["metadata"], **raw_message.metadata},
                             request_id=request_id,
                             timestamp=getattr(sensor_reading, 'timestamp', raw_message.timestamp)
                         )

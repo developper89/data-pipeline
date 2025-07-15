@@ -178,10 +178,12 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                         payload_hex=request.payload.hex(),
                         protocol="coap",
                         metadata={
+                            "protocol": "coap",
                             "source": source,
                             "method": method,
                             "uri_path": "/".join(uri_path_list),
                             "translator_used": translation_result.translator_used,
+                            "manufacturer": translation_result.translator.manufacturer,
                             "request_id": request_id
                         }
                     )

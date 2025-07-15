@@ -347,10 +347,12 @@ class MQTTClientWrapper:
                 payload_hex=payload_str,  # Updated field name from payload to payload_hex
                 protocol="mqtt",
                 metadata={
+                    "protocol": "mqtt",
                     "mqtt_topic": msg.topic,
                     "mqtt_qos": msg.qos,
                     "mqtt_retain": msg.retain,
                     "translator_used": result.translator_used,
+                    "manufacturer": result.translator.manufacturer,
                 }
             )
             

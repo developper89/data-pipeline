@@ -47,7 +47,9 @@ class Validator:
             and a list of any validation errors
         """
         errors = []
-        
+        # if device_id == "2121004":
+        #     logger.info(f"standardized_data: {standardized_data.model_dump()}")
+        #     logger.info(f"datatype: {datatype.to_dict()}")
         # Clone datatype to avoid modifying the original object
         import copy
         datatype = copy.deepcopy(datatype)
@@ -56,22 +58,12 @@ class Validator:
         datatype.name = datatype_name
         
         # Values to be processed
-        values = standardized_data.values
-
-        if standardized_data.display_names:
-            # Use suggested display names with processing
-            processed_display_names = self._process_display_name_replacement(
-                standardized_data.display_names, [datatype.name] * len(values)
-            )
-            datatype.display_names = processed_display_names
-            logger.debug(f"Updated display names for datatype {datatype.id}: {processed_display_names}")
+        
         # else:
         #     datatype.display_names = [datatype.name] * len(values)
         #     logger.info(f"Used existing display name for datatype {datatype.id}: {datatype.name}")
             
         # Check for auto-discovery and update datatype if enabled
-        if datatype and datatype.auto_discovery:
-            datatype = await self._perform_auto_discovery(datatype, standardized_data, device_id)
         
         # 3. Apply any parsing operations first
         # parsing_applied = False
@@ -99,9 +91,38 @@ class Validator:
         if standardized_data.labels and hasattr(datatype, 'labels') and datatype.labels:
             datatype, standardized_data = self._align_datatype_with_standardized_data(datatype, standardized_data, request_id)
             # Update values to use the filtered standardized_data
-            values = standardized_data.values
 
-        # 5. Validate all values against the datatype
+        values = standardized_data.values
+        # if device_id == "2121004":
+        #     logger.info(f"standardized_data after alignment: {standardized_data.model_dump()}")
+        #     logger.info(f"datatype after alignment: {datatype.to_dict()}")
+        if standardized_data.display_names:
+            # Use suggested display names with processing
+            processed_display_names = self._process_display_name_replacement(
+                standardized_data.display_names, [datatype.name] * len(values)
+            )
+            datatype.display_names = processed_display_names
+            logger.debug(f"Updated display names for datatype {datatype.id}: {processed_display_names}")
+        
+        if datatype and datatype.auto_discovery:
+            datatype = await self._perform_auto_discovery(datatype, standardized_data, device_id)
+
+        # 5. Check whitelist values first - whitelisted values skip other validations
+        whitelist_valid, whitelist_results, whitelist_errors = self._validate_whitelist(
+            values,
+            datatype,
+            standardized_data
+        )
+
+        # Add any whitelist validation errors
+        for error_msg in whitelist_errors:
+            errors.append(ErrorMessage(
+                error=error_msg,
+                original_message={"device_id": device_id},
+                request_id=request_id
+            ))
+
+        # 6. Validate types for non-whitelisted values
         # data_type is now List[DatatypeType], pass full array for per-index validation
         expected_types = []
         if hasattr(datatype, 'data_type') and datatype.data_type:
@@ -110,7 +131,8 @@ class Validator:
         type_valid, converted_values, type_validation_results, type_errors = self._validate_type(
             values, 
             expected_types,
-            standardized_data
+            standardized_data,
+            whitelist_results  # Pass whitelist results to skip validation for whitelisted values
         )
 
         # Add any type validation errors
@@ -121,11 +143,12 @@ class Validator:
                 request_id=request_id
             ))
         
-        # 6. Validate range for all values
+        # 7. Validate range for non-whitelisted values
         range_valid, range_results, range_errors = self._validate_range(
             converted_values,
             datatype,
-            standardized_data
+            standardized_data,
+            whitelist_results  # Pass whitelist results to skip validation for whitelisted values
         )
 
         # Add any range validation errors
@@ -136,17 +159,18 @@ class Validator:
                 request_id=request_id
             ))
         
-        # 7. Build validated output with partial validation support
+        # 8. Build validated output with partial validation support
         # Filter out invalid values but keep valid ones
         if converted_values and range_results:
-            # Combine type and range validation results to determine which values are valid
+            # Combine whitelist, type and range validation results to determine which values are valid
             valid_indices = []
             for i in range(len(converted_values)):
-                # A value is valid if it passes both type conversion and range validation
+                # A value is valid if it's whitelisted OR passes both type conversion and range validation
+                whitelisted = (i < len(whitelist_results) and whitelist_results[i])
                 type_valid_for_index = (i < len(type_validation_results) and type_validation_results[i])
                 range_valid_for_index = (i < len(range_results) and range_results[i])
                 
-                if type_valid_for_index and range_valid_for_index:
+                if whitelisted or (type_valid_for_index and range_valid_for_index):
                     valid_indices.append(i)
             
             if valid_indices:
@@ -164,6 +188,7 @@ class Validator:
                 filtered_datatype_max = [datatype.max[i] for i in valid_indices] if datatype.max else []
                 filtered_datatype_data_type = [datatype.data_type[i] for i in valid_indices] if datatype.data_type else []
                 filtered_datatype_possible_values = [datatype.possible_values[i] for i in valid_indices] if datatype.possible_values else []
+                filtered_datatype_whitelist_values = [datatype.whitelist_values[i] for i in valid_indices] if datatype.whitelist_values else []
                 filtered_datatype_description = [datatype.description[i] for i in valid_indices] if datatype.description else []
                 
                 # Create a filtered standardized_data object for building the validated output
@@ -192,6 +217,7 @@ class Validator:
                 filtered_datatype.max = filtered_datatype_max
                 filtered_datatype.data_type = filtered_datatype_data_type
                 filtered_datatype.possible_values = filtered_datatype_possible_values
+                filtered_datatype.whitelist_values = filtered_datatype_whitelist_values
                 filtered_datatype.description = filtered_datatype_description
                 
                 # Build validated output with filtered data
@@ -364,14 +390,21 @@ class Validator:
                 updated = True
                 logger.debug(f"Auto-discovery: Used existing first possible_values for datatype {datatype.id}")
             
-            # 8. Handle description - use existing first value if available
+            # 8. Handle whitelist_values - use existing first value if available
+            if hasattr(datatype, 'whitelist_values') and datatype.whitelist_values and len(datatype.whitelist_values) > 0:
+                first_whitelist_values = datatype.whitelist_values[0]
+                update_data['whitelist_values'] = [first_whitelist_values] * num_values
+                updated = True
+                logger.debug(f"Auto-discovery: Used existing first whitelist_values for datatype {datatype.id}")
+            
+            # 9. Handle description - use existing first value if available
             if hasattr(datatype, 'description') and datatype.description and len(datatype.description) > 0:
                 first_description = datatype.description[0]
                 update_data['description'] = [first_description] * num_values
                 updated = True
                 logger.debug(f"Auto-discovery: Used existing first description for datatype {datatype.id}")
             
-            # 9. Set auto_discovery to False after performing discovery
+            # 10. Set auto_discovery to False after performing discovery
             # update_data['auto_discovery'] = False
             # updated = True
             logger.debug(f"Auto-discovery: Set auto_discovery to False for datatype {datatype.id}")
@@ -445,7 +478,7 @@ class Validator:
             
             # Log any unmatched labels
             if unmatched_labels:
-                logger.warning(f"[{request_id}] Unmatched labels in standardized_data will be filtered out: {unmatched_labels}")
+                logger.debug(f"[{request_id}] Unmatched labels in standardized_data will be filtered out: {unmatched_labels}")
             
             if not matched_std_indices:
                 logger.error(f"[{request_id}] No matching labels found between standardized_data and datatype")
@@ -536,6 +569,9 @@ class Validator:
             if hasattr(aligned_datatype, 'possible_values') and aligned_datatype.possible_values:
                 aligned_datatype.possible_values = reorder_array(aligned_datatype.possible_values, [])
                 
+            if hasattr(aligned_datatype, 'whitelist_values') and aligned_datatype.whitelist_values:
+                aligned_datatype.whitelist_values = reorder_array(aligned_datatype.whitelist_values, [])
+                
             if hasattr(aligned_datatype, 'description') and aligned_datatype.description:
                 aligned_datatype.description = reorder_array(aligned_datatype.description, "")
 
@@ -550,7 +586,7 @@ class Validator:
             logger.error(f"[{request_id}] Error aligning datatype with standardized_data: {e}")
             return datatype, standardized_data  # Return original objects if alignment fails
 
-    def _validate_range(self, values: List[Any], datatype: Any, standardized_data: StandardizedOutput) -> Tuple[bool, List[bool], List[str]]:
+    def _validate_range(self, values: List[Any], datatype: Any, standardized_data: StandardizedOutput, whitelist_results: List[bool] = None) -> Tuple[bool, List[bool], List[str]]:
         """
         Check if values are within the range defined in datatype.
         Uses per-index validation: each value is checked against min/max at the same index.
@@ -591,6 +627,12 @@ class Validator:
             
             # Format label info for error messages
             label_info = f" (label: {label})" if label else ""
+            
+            # Skip range validation for whitelisted values
+            if whitelist_results and i < len(whitelist_results) and whitelist_results[i]:
+                validation_results.append(True)
+                logger.debug(f"Value {value} at index {i}{label_info} is whitelisted, skipping range validation")
+                continue
             
             if value is None:
                 validation_results.append(False)
@@ -672,7 +714,7 @@ class Validator:
         
         return all_valid, validation_results, error_messages
         
-    def _validate_type(self, values: List[Any], expected_types: List[DatatypeType], standardized_data: StandardizedOutput) -> Tuple[bool, List[Any], List[bool], List[str]]:
+    def _validate_type(self, values: List[Any], expected_types: List[DatatypeType], standardized_data: StandardizedOutput, whitelist_results: List[bool] = None) -> Tuple[bool, List[Any], List[bool], List[str]]:
         """
         Validate and convert a list of values to the expected type if possible.
         Uses per-index validation: each value is validated against the type at the same index.
@@ -706,6 +748,13 @@ class Validator:
             
             # Format label info for error messages
             label_info = f" (label: {label})" if label else ""
+            
+            # Skip type validation for whitelisted values
+            if whitelist_results and i < len(whitelist_results) and whitelist_results[i]:
+                converted_values.append(value)  # Keep original value for whitelisted items
+                type_validation_results.append(True)
+                logger.debug(f"Value {value} at index {i}{label_info} is whitelisted, skipping type validation")
+                continue
             
             if value is None:
                 converted_values.append(None)
@@ -825,6 +874,7 @@ class Validator:
             "datatype_type": datatype_type_strings,
             "datatype_category": str(datatype.category),
             "datatype_possible_values": datatype.possible_values,
+            "datatype_whitelist_values": datatype.whitelist_values,
             "datatype_description": datatype.description,
             "datatype_min": datatype.min,
             "datatype_max": datatype.max,
@@ -981,3 +1031,61 @@ class Validator:
                 return []
         
         return []
+
+    def _validate_whitelist(self, values: List[Any], datatype: Any, standardized_data: StandardizedOutput) -> Tuple[bool, List[bool], List[str]]:
+        """
+        Check if values match whitelist entries and should skip other validations.
+        Uses per-index validation: each value is checked against the whitelist at the same index.
+        
+        Args:
+            values: The list of values to validate
+            datatype: The datatype object containing whitelist_values
+            standardized_data: StandardizedOutput object containing labels
+            
+        Returns:
+            Tuple of (all_valid, whitelist_results, error_messages)
+            whitelist_results[i] = True means value at index i is whitelisted and should skip other validations
+        """
+        if not values:
+            return True, [], []
+        
+        # Get whitelist_values from datatype
+        whitelist_values = getattr(datatype, 'whitelist_values', [])
+        
+        # If no whitelist is defined, no values are whitelisted (all go through normal validation)
+        if not whitelist_values:
+            return True, [False] * len(values), []
+        
+        # Get labels from standardized_data for better error messages
+        labels = standardized_data.labels if standardized_data.labels else []
+        
+        whitelist_results = []
+        error_messages = []
+        
+        for i, value in enumerate(values):
+            # Get label for this index (labels array is same length as values)
+            label = labels[i] if labels and i < len(labels) else ""
+            
+            # Format label info for error messages
+            label_info = f" (label: {label})" if label else ""
+            
+            if value is None:
+                whitelist_results.append(False)
+                continue
+            
+            # Get whitelist for this index (use last available if array is shorter)
+            whitelist_for_index = []
+            if i < len(whitelist_values):
+                whitelist_for_index = whitelist_values[i]
+            elif whitelist_values:
+                # Use last available whitelist for remaining indices
+                whitelist_for_index = whitelist_values[-1]
+            
+            # Check if value is in whitelist for this index
+            if whitelist_for_index and str(value) in whitelist_for_index:
+                whitelist_results.append(True)
+                logger.debug(f"Value {value} at index {i}{label_info} is whitelisted, skipping type and range validation")
+            else:
+                whitelist_results.append(False)
+        
+        return True, whitelist_results, error_messages

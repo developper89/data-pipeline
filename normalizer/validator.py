@@ -257,6 +257,7 @@ class Validator:
             'dt_data_type': safe_filter(getattr(datatype, 'data_type', []), valid_indices),
             'dt_possible_values': safe_filter(getattr(datatype, 'possible_values', []), valid_indices),
             'dt_whitelist_values': safe_filter(getattr(datatype, 'whitelist_values', []), valid_indices),
+            'dt_read_only': safe_filter(getattr(datatype, 'read_only', []), valid_indices),
             'dt_description': safe_filter(getattr(datatype, 'description', []), valid_indices),
         }
     
@@ -275,6 +276,7 @@ class Validator:
             'data_type': 'dt_data_type',
             'possible_values': 'dt_possible_values',
             'whitelist_values': 'dt_whitelist_values',
+            'read_only': 'dt_read_only',
             'description': 'dt_description',
         }
         
@@ -346,7 +348,7 @@ class Validator:
                 logger.debug(f"Auto-discovery: Used existing first label for datatype {datatype.id}: {first_label}")
             
             # Handle other array attributes
-            array_attributes = ['persist', 'possible_values', 'whitelist_values', 'description']
+            array_attributes = ['persist', 'possible_values', 'whitelist_values', 'description','read_only']
             for attr_name in array_attributes:
                 existing_values = getattr(datatype, attr_name, [])
                 if existing_values:
@@ -500,7 +502,7 @@ class Validator:
         # Array attributes to reorder
         array_attributes = [
             'data_type', 'min', 'max', 'unit', 'display_names', 'persist',
-            'labels', 'possible_values', 'whitelist_values', 'description'
+            'labels', 'possible_values', 'whitelist_values', 'description', 'read_only'
         ]
         
         for attr_name in array_attributes:
@@ -843,6 +845,7 @@ class Validator:
             "datatype_category": str(datatype.category),
             "datatype_possible_values": datatype.possible_values,
             "datatype_whitelist_values": datatype.whitelist_values,
+            "datatype_read_only": datatype.read_only,
             "datatype_description": datatype.description,
             "datatype_min": datatype.min,
             "datatype_max": datatype.max,

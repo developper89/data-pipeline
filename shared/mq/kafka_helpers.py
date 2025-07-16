@@ -136,83 +136,116 @@ def get_optimized_producer_config(**overrides) -> Dict[str, Any]:
     config.update(overrides)
     return config
 
-def create_kafka_producer(bootstrap_servers, base_delay=1, **config_overrides):
-    """Creates a confluent-kafka Producer instance with enhanced error handling."""
-    # Validate servers first
-    validated_servers = validate_bootstrap_servers(bootstrap_servers)
-    if not validated_servers:
-        logger.warning(f"No reachable Kafka brokers found in: {bootstrap_servers}. Will keep retrying...")
-        validated_servers = bootstrap_servers  # Use original servers and keep trying
+def create_kafka_producer(bootstrap_servers: str, **config_overrides) -> Producer:
+    """
+    Create and return a Kafka producer instance.
     
-    producer = None
-    retry_count = 0
+    Args:
+        bootstrap_servers: Kafka broker addresses (e.g., "localhost:9092")
+        **config_overrides: Additional configuration overrides
+        
+    Returns:
+        Configured Kafka Producer instance
+        
+    Raises:
+        KafkaException: If producer creation fails
+    """
+    # Base configuration
+    config = {
+        'bootstrap.servers': bootstrap_servers,
+        'client.id': f'python-producer-{int(time.time())}',
+        'enable.idempotence': True,
+        'retries': 3,
+        'retry.backoff.ms': 1000,
+        'max.in.flight.requests.per.connection': 5,
+        'acks': 'all',
+        'compression.type': 'snappy',
+        'batch.size': 16384,
+        'linger.ms': 10,
+        'security.protocol': 'PLAINTEXT',
+        'api.version.request': True,
+        'api.version.fallback.ms': 0,
+        'message.max.bytes': 1048576,
+        'request.timeout.ms': 30000,
+        'metadata.max.age.ms': 300000,
+        'socket.keepalive.enable': True,
+        'log.connection.close': False,
+        'statistics.interval.ms': 0,
+        'log_level': 1,
+    }
     
-    while producer is None:
-        try:
-            # Get optimized configuration
-            config = get_optimized_producer_config(**config_overrides)
-            config['bootstrap.servers'] = validated_servers
-            
-            logger.debug(f"Creating Producer with config: {config}")
-            producer = Producer(config)
-            logger.info(f"Kafka Producer connected to {validated_servers}")
-            return producer
-            
-        except KafkaException as e:
-            retry_count += 1
-            delay = base_delay * (2 ** min(retry_count - 1, 6))  # Exponential backoff, max 64 seconds
-            logger.error(f"Kafka error creating producer (attempt {retry_count}): {e}")
-            logger.info(f"Retrying in {delay} seconds...")
-            time.sleep(delay)
-                
-        except Exception as e:
-            retry_count += 1
-            delay = base_delay * (2 ** min(retry_count - 1, 6))
-            logger.error(f"Unexpected error creating Kafka Producer (attempt {retry_count}): {e}")
-            logger.info(f"Retrying in {delay} seconds...")
-            time.sleep(delay)
+    # Apply any overrides
+    config.update(config_overrides)
+    
+    logger.debug(f"Creating Kafka producer with config: {bootstrap_servers}")
+    
+    try:
+        producer = Producer(config)
+        
+        # Test connectivity with a simple metadata request
+        metadata = producer.list_topics(timeout=10)
+        
+        logger.info(f"Kafka Producer connected to {bootstrap_servers}")
+        return producer
+        
+    except Exception as e:
+        logger.error(f"Failed to create Kafka producer: {e}")
+        raise KafkaException(f"Producer creation failed: {e}")
 
-def create_kafka_consumer(topic, group_id, bootstrap_servers, auto_offset_reset='earliest', base_delay=1, **config_overrides):
-    """Creates a confluent-kafka Consumer instance with enhanced error handling."""
-    logger.info(f"Creating Kafka consumer for topic '{topic}', group '{group_id}', servers: {bootstrap_servers}")
+def create_kafka_consumer(topic: str, group_id: str, bootstrap_servers: str, **config_overrides) -> Consumer:
+    """
+    Create and return a Kafka consumer instance.
     
-    # Validate servers first
-    validated_servers = validate_bootstrap_servers(bootstrap_servers)
-    if not validated_servers:
-        logger.warning(f"No reachable Kafka brokers found in: {bootstrap_servers}. Will keep retrying...")
-        validated_servers = bootstrap_servers  # Use original servers and keep trying
+    Args:
+        topic: Kafka topic to consume from
+        group_id: Consumer group ID
+        bootstrap_servers: Kafka broker addresses (e.g., "localhost:9092")
+        **config_overrides: Additional configuration overrides
+        
+    Returns:
+        Configured Kafka Consumer instance
+        
+    Raises:
+        KafkaException: If consumer creation fails
+    """
+    # Base configuration
+    config = {
+        'bootstrap.servers': bootstrap_servers,
+        'group.id': group_id,
+        'client.id': f'python-consumer-{int(time.time())}',
+        'auto.offset.reset': 'earliest',
+        'enable.auto.commit': False,
+        'max.poll.interval.ms': 300000,
+        'session.timeout.ms': 45000,
+        'heartbeat.interval.ms': 3000,
+        'fetch.min.bytes': 1,
+        'max.partition.fetch.bytes': 1048576,
+        'security.protocol': 'PLAINTEXT',
+        'api.version.request': True,
+        'api.version.fallback.ms': 0,
+        'socket.keepalive.enable': True,
+        'log.connection.close': False,
+        'statistics.interval.ms': 0,
+        'log_level': 1,
+    }
     
-    consumer = None
-    retry_count = 0
+    # Apply any overrides
+    config.update(config_overrides)
     
-    while consumer is None:
-        try:
-            # Get optimized configuration
-            config = get_optimized_consumer_config(group_id, **config_overrides)
-            config['bootstrap.servers'] = validated_servers
-            config['auto.offset.reset'] = auto_offset_reset
-            
-            logger.debug(f"Creating Consumer with config: {config}")
-            consumer = Consumer(config)
-            
-            # Subscribe to topic
-            consumer.subscribe([topic])
-            logger.info(f"Kafka Consumer connected to {validated_servers} for topic '{topic}', group '{group_id}'")
-            return consumer
-            
-        except KafkaException as e:
-            retry_count += 1
-            delay = base_delay * (2 ** min(retry_count - 1, 6))
-            logger.error(f"Kafka error creating consumer (attempt {retry_count}): {e}")
-            logger.info(f"Retrying in {delay} seconds...")
-            time.sleep(delay)
-                
-        except Exception as e:
-            retry_count += 1
-            delay = base_delay * (2 ** min(retry_count - 1, 6))
-            logger.error(f"Unexpected error creating Kafka Consumer (attempt {retry_count}): {e}")
-            logger.info(f"Retrying in {delay} seconds...")
-            time.sleep(delay)
+    logger.debug(f"Creating Kafka consumer for topic '{topic}', group '{group_id}', servers: {bootstrap_servers}")
+    
+    try:
+        consumer = Consumer(config)
+        
+        # Test connectivity with a simple metadata request
+        metadata = consumer.list_topics(timeout=10)
+        
+        logger.info(f"Kafka Consumer connected to {bootstrap_servers} for topic '{topic}', group '{group_id}'")
+        return consumer
+        
+    except Exception as e:
+        logger.error(f"Failed to create Kafka consumer: {e}")
+        raise KafkaException(f"Consumer creation failed: {e}")
 
 def safe_kafka_poll(consumer: Consumer, timeout: float = 1.0) -> Optional[Any]:
     """
@@ -389,17 +422,8 @@ class AsyncResilientKafkaConsumer:
             
             # Use asyncio.wait_for to add timeout to consumer creation
             self.consumer = await asyncio.wait_for(
-                asyncio.get_event_loop().run_in_executor(
-                    None,
-                    create_kafka_consumer,
-                    self.topic,
-                    self.group_id,
-                    self.bootstrap_servers,
-                    self.auto_offset_reset,
-                    self.base_delay,
-                    **self.config_overrides
-                ),
-                timeout=30.0  # 30 second timeout for consumer creation
+                asyncio.create_task(self._create_consumer_async()),
+                timeout=30.0
             )
             
             # If seek_to_end is enabled, wait for partition assignment and seek to end
@@ -408,7 +432,7 @@ class AsyncResilientKafkaConsumer:
             
             self.retry_count = 0
             self.last_error = None
-            logger.info(f"AsyncResilientKafkaConsumer successfully created for topic '{self.topic}'")
+            logger.debug(f"AsyncResilientKafkaConsumer successfully created for topic '{self.topic}'")
             return True
         except asyncio.TimeoutError:
             self.last_error = "Consumer creation timeout"
@@ -418,6 +442,22 @@ class AsyncResilientKafkaConsumer:
             self.last_error = e
             logger.error(f"Failed to create AsyncResilientKafkaConsumer for topic '{self.topic}': {e}")
             return False
+    
+    async def _create_consumer_async(self):
+        """Async wrapper for synchronous consumer creation."""
+        loop = asyncio.get_event_loop()
+        consumer = await loop.run_in_executor(
+            None,
+            create_kafka_consumer,
+            self.topic,
+            self.group_id,
+            self.bootstrap_servers,
+            **self.config_overrides
+        )
+        
+        # Subscribe to the topic
+        consumer.subscribe([self.topic])
+        return consumer
     
     async def _setup_seek_to_end(self):
         """Setup consumer to seek to end of partitions."""
@@ -496,10 +536,10 @@ class AsyncResilientKafkaConsumer:
                 return
         
         self._running = True
-        logger.info(f"AsyncResilientKafkaConsumer started for topic '{self.topic}'")
+        logger.debug(f"AsyncResilientKafkaConsumer started for topic '{self.topic}'")
         
         consecutive_empty_polls = 0
-        max_consecutive_empty_polls = 60  # 1 minute of empty polls
+        max_consecutive_empty_polls = 600  # 1 minute of empty polls
         message_batch = []
         
         while self._running and not self._stop_event.is_set():
@@ -630,7 +670,7 @@ class AsyncResilientKafkaConsumer:
                 logger.error(f"Unexpected error in consumer loop for topic '{self.topic}': {e}")
                 await self._handle_consumer_error(str(e))
                 
-        logger.info("AsyncResilientKafkaConsumer stopped")
+        logger.debug("AsyncResilientKafkaConsumer stopped")
     
     async def _handle_consumer_error(self, error):
         """Handle consumer errors with reconnection logic."""
@@ -668,17 +708,17 @@ class AsyncResilientKafkaConsumer:
     
     async def stop(self):
         """Stop the consumer gracefully."""
-        logger.info(f"Stopping AsyncResilientKafkaConsumer for topic '{self.topic}'")
+        logger.debug(f"Stopping AsyncResilientKafkaConsumer for topic '{self.topic}'")
         self._running = False
         self._stop_event.set()
         if self.consumer:
             try:
-                logger.info(f"Closing consumer connection for topic '{self.topic}'")
+                logger.debug(f"Closing consumer connection for topic '{self.topic}'")
                 self.consumer.close()
             except Exception as e:
                 logger.warning(f"Error closing consumer for topic '{self.topic}': {e}")
             self.consumer = None
-        logger.info(f"AsyncResilientKafkaConsumer stopped for topic '{self.topic}'")
+        logger.debug(f"AsyncResilientKafkaConsumer stopped for topic '{self.topic}'")
     
     def is_healthy(self):
         """Check if the consumer is healthy."""

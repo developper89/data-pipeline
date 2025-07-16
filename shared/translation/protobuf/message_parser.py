@@ -70,7 +70,7 @@ class ProtobufMessageParser:
                 logger.warning(f"Failed to load {message_type} for {self.manufacturer}: {e}")
                 continue
 
-        logger.info(f"Successfully loaded {len(self.proto_modules)} protobuf message types for {self.manufacturer}")
+        logger.debug(f"Successfully loaded {len(self.proto_modules)} protobuf message types for {self.manufacturer}")
 
     def _try_load_existing_modules(self) -> bool:
         """

@@ -61,7 +61,7 @@ class ProtobufCompiler:
             # Load compiled modules using direct imports
             self._load_compiled_modules()
             
-            logger.info(f"Successfully compiled and loaded {len(self.compiled_modules)} protobuf modules for {self.manufacturer}")
+            logger.debug(f"Successfully compiled and loaded {len(self.compiled_modules)} protobuf modules for {self.manufacturer}")
             return self.compiled_modules
             
         except Exception as e:
@@ -102,22 +102,35 @@ class ProtobufCompiler:
             logger.debug(f"Added {protobuf_path} to Python path")
     
     def _load_compiled_modules(self):
-        """Load compiled Python modules using direct imports."""
-        # Find all compiled _pb2.py files
-        pb2_files = list(self.proto_output_dir.glob("*_pb2.py"))
+        """Load compiled protobuf modules."""
+        # Find all compiled .py files
+        py_files = list(self.proto_output_dir.glob("*_pb2.py"))
         
-        for pb2_file in pb2_files:
-            module_name = pb2_file.stem  # Remove .py extension
+        if not py_files:
+            logger.warning(f"No compiled protobuf modules found in {self.proto_output_dir}")
+            return
+        
+        logger.debug(f"Found {len(py_files)} compiled protobuf modules")
+        
+        # Load each module
+        for py_file in py_files:
+            module_name = py_file.stem  # Remove .py extension
             
             try:
-                # Import directly since protobuf directory is in sys.path
-                module = importlib.import_module(module_name)
+                spec = importlib.util.spec_from_file_location(module_name, py_file)
+                if spec is None:
+                    logger.warning(f"Could not create spec for {module_name}")
+                    continue
+                    
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
                 
                 self.compiled_modules[module_name] = module
                 logger.debug(f"Loaded compiled module: {module_name}")
                 
             except Exception as e:
-                logger.warning(f"Failed to import compiled module {module_name}: {e}")
+                logger.warning(f"Failed to load compiled module {module_name}: {e}")
+                continue
     
     def get_proto_class(self, module_name: str, class_name: str) -> Optional[type]:
         """
@@ -160,38 +173,39 @@ class ProtobufCompiler:
 
     def try_load_existing_modules(self) -> bool:
         """
-        Try to load existing compiled protobuf modules without compilation.
+        Try to load existing compiled protobuf modules.
         
         Returns:
-            bool: True if existing modules were successfully loaded, False otherwise
+            True if existing modules were successfully loaded, False otherwise
         """
+        if not self.proto_output_dir.exists():
+            logger.debug(f"Protobuf output directory does not exist: {self.proto_output_dir}")
+            return False
+        
+        # Check if there are existing compiled modules
+        py_files = list(self.proto_output_dir.glob("*_pb2.py"))
+        if not py_files:
+            logger.debug(f"No existing compiled protobuf modules found in {self.proto_output_dir}")
+            return False
+        
+        logger.debug(f"Found {len(py_files)} existing compiled protobuf modules")
+        
         try:
-            # Check if output directory exists
-            if not self.proto_output_dir.exists():
-                logger.debug(f"Proto output directory does not exist: {self.proto_output_dir}")
-                return False
-            
-            # Check if there are any compiled _pb2.py files
-            pb2_files = list(self.proto_output_dir.glob("*_pb2.py"))
-            if not pb2_files:
-                logger.debug(f"No compiled _pb2.py files found in {self.proto_output_dir}")
-                return False
-            
-            # Add protobuf output directory to Python path for imports
+            # Add to Python path
             self._add_to_python_path()
             
-            # Try to load all compiled modules
+            # Load compiled modules
             self._load_compiled_modules()
             
             if self.compiled_modules:
-                logger.info(f"Successfully loaded {len(self.compiled_modules)} existing compiled modules for {self.manufacturer}")
+                logger.debug(f"Successfully loaded {len(self.compiled_modules)} existing compiled modules for {self.manufacturer}")
                 return True
             else:
                 logger.debug(f"No modules could be loaded for {self.manufacturer}")
                 return False
                 
         except Exception as e:
-            logger.debug(f"Failed to load existing modules for {self.manufacturer}: {e}")
+            logger.debug(f"Failed to load existing compiled modules for {self.manufacturer}: {e}")
             return False
 
 

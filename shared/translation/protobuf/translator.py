@@ -68,7 +68,6 @@ class ProtobufTranslator(BaseTranslator):
             else:
                 # We're in a sync context, can use asyncio.run
                 script_module = asyncio.run(self.script_client.get_module(script_path))
-                logger.info(f"Successfully loaded parser script module '{self.parser_script_path}' for {self.manufacturer} translator")
                 return script_module
                 
         except ScriptNotFoundError as e:

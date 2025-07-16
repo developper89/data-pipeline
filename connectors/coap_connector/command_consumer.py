@@ -37,7 +37,7 @@ class CommandConsumer:
         
         # Cache for loaded translators
         self._translator_cache = {}
-        logger.info("Command consumer initialized with translator-based formatting support")
+        logger.debug("Command consumer initialized with translator-based formatting support")
         
     async def start(self):
         """Start the command consumer."""
@@ -56,17 +56,17 @@ class CommandConsumer:
             
         self.running = True
         self._stop_event.clear()
-        logger.info("Command consumer started")
+        logger.debug("Command consumer started")
         
     async def consume_commands(self):
         """Start consuming command messages using AsyncResilientKafkaConsumer."""
-        logger.info("Starting command consumption")
+        logger.debug("Starting command consumption")
         
         if not self.resilient_consumer:
             logger.error("Cannot start consuming: AsyncResilientKafkaConsumer not initialized")
             return
             
-        logger.info(f"Starting consumption for topic '{self.resilient_consumer.topic}' with group '{self.resilient_consumer.group_id}'")
+        logger.debug(f"Starting consumption for topic '{self.resilient_consumer.topic}' with group '{self.resilient_consumer.group_id}'")
         
         try:
             # This handles all the complexity: polling, error recovery, reconnection, etc.
@@ -214,7 +214,7 @@ class CommandConsumer:
             metadata = command_message.metadata
             manufacturer = metadata.get('manufacturer')
             command_type = command_message.command_type
-            logger.info(f"Formatting command for device {device_id} {command_message.model_dump()}")
+            logger.debug(f"Formatting command for device {device_id} {command_message.model_dump()}")
             # Get translator instance based on command type and manufacturer
             translator = await self._get_translator_for_device(device_id, command_type, manufacturer)
             if not translator:
@@ -264,70 +264,72 @@ class CommandConsumer:
     async def _get_translator_for_device(self, device_id: str, command_type: str = None, manufacturer: str = None):
         """Get translator instance for device based on command type and manufacturer."""
         cache_key = f"{manufacturer}_translator"
-        logger.info(f"Cache key: {cache_key}")
-        if cache_key not in self._translator_cache:
-            try:
-                # Get translator configs for coap-connector
-                translator_configs = get_translator_configs("coap-connector")
+        if cache_key in self._translator_cache:
+            logger.debug(f"Translator for {cache_key} found in cache")
+            return self._translator_cache[cache_key]
 
-                # Find appropriate translator based on manufacturer and command type
-                selected_translator_config = None
+        try:
+            # Get translator configs for coap-connector
+            translator_configs = get_translator_configs("coap-connector")
+
+            # Find appropriate translator based on manufacturer and command type
+            selected_translator_config = None
+            
+            for translator_config in translator_configs:
+                config_details = translator_config.get('config', {})
                 
-                for translator_config in translator_configs:
-                    config_details = translator_config.get('config', {})
-                    
-                    # Check manufacturer match first (most important)
-                    config_manufacturer = config_details.get('manufacturer', '')
-                    if manufacturer and config_manufacturer != manufacturer:
-                        continue
-                    
-                    # Check if this translator supports the command type
-                    command_formatting = config_details.get('command_formatting', {})
-                    if command_formatting and command_type:
-                        supported_commands = command_formatting.get('validation', {}).get('supported_commands', [])
-                        if command_type in supported_commands:
-                            selected_translator_config = translator_config
-                            break
-                    elif not command_type:
-                        # If no specific command type, use first matching manufacturer
+                # Check manufacturer match first (most important)
+                config_manufacturer = config_details.get('manufacturer', '')
+                if manufacturer and config_manufacturer != manufacturer:
+                    continue
+                
+                # Check if this translator supports the command type
+                command_formatting = config_details.get('command_formatting', {})
+                if command_formatting and command_type:
+                    supported_commands = command_formatting.get('validation', {}).get('supported_commands', [])
+                    if command_type in supported_commands:
                         selected_translator_config = translator_config
                         break
-                
-                # Fallback to first matching manufacturer if no command type match
-                if not selected_translator_config and manufacturer:
-                    for translator_config in translator_configs:
-                        config_details = translator_config.get('config', {})
-                        config_manufacturer = config_details.get('manufacturer', '')
-                        if config_manufacturer == manufacturer:
-                            selected_translator_config = translator_config
-                            break
-                
-                # Final fallback to first available translator
-                if not selected_translator_config and translator_configs:
-                    selected_translator_config = translator_configs[0]
+                elif not command_type:
+                    # If no specific command type, use first matching manufacturer
+                    selected_translator_config = translator_config
+                    break
+            
+            # Fallback to first matching manufacturer if no command type match
+            if not selected_translator_config and manufacturer:
+                for translator_config in translator_configs:
+                    config_details = translator_config.get('config', {})
+                    config_manufacturer = config_details.get('manufacturer', '')
+                    if config_manufacturer == manufacturer:
+                        selected_translator_config = translator_config
+                        break
+            
+            # Final fallback to first available translator
+            if not selected_translator_config and translator_configs:
+                selected_translator_config = translator_configs[0]
 
-                if selected_translator_config:
-                    translator = TranslatorFactory.create_translator(selected_translator_config)
-                    
-                    # Load script module if translator has parser_script_path
-                    if hasattr(translator, 'parser_script_path') and translator.parser_script_path:
-                        try:
-                            await translator.load_script_module_async()
-                            logger.debug(f"Loaded script module for translator '{manufacturer}', command_type '{command_type}'")
-                        except Exception as e:
-                            logger.warning(f"Failed to load script module for translator: {e}")
-                    
-                    self._translator_cache[cache_key] = translator
-                    logger.debug(f"Created translator for manufacturer '{manufacturer}', command_type '{command_type}'")
-                else:
-                    logger.error(f"No suitable translator configuration found for manufacturer '{manufacturer}', command_type '{command_type}'")
-                    return None
-
-            except Exception as e:
-                logger.error(f"Failed to create translator: {e}")
+            if selected_translator_config:
+                translator = TranslatorFactory.create_translator(selected_translator_config)
+                
+                # Load script module if translator has parser_script_path
+                if hasattr(translator, 'parser_script_path') and translator.parser_script_path:
+                    try:
+                        await translator.load_script_module_async()
+                        logger.debug(f"Loaded script module for translator '{manufacturer}', command_type '{command_type}'")
+                    except Exception as e:
+                        logger.warning(f"Failed to load script module for translator: {e}")
+                
+                self._translator_cache[cache_key] = translator
+                logger.debug(f"Created translator for manufacturer '{manufacturer}', command_type '{command_type}'")
+            else:
+                logger.error(f"No suitable translator configuration found for manufacturer '{manufacturer}', command_type '{command_type}'")
                 return None
 
-        return self._translator_cache[cache_key]
+        except Exception as e:
+            logger.error(f"Failed to create translator: {e}")
+            return None
+
+
     
     def get_pending_commands(self, device_id: str) -> List[Dict[str, Any]]:
         """

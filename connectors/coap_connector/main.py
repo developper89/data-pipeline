@@ -47,16 +47,16 @@ class CoAPConnectorService:
         
         try:
             # Initialize Kafka producer
-            logger.info("Creating Kafka producer...")
+            logger.debug("Creating Kafka producer...")
             self.kafka_msg_producer = KafkaMsgProducer(create_kafka_producer(config.KAFKA_BOOTSTRAP_SERVERS))
-            logger.info("Kafka producer created successfully")
+            logger.debug("Kafka producer created successfully")
             
             # Initialize command consumer
             self.command_consumer = CommandConsumer()
             await self.command_consumer.start()
             
             # Initialize CoAP server with required parameters
-            logger.info(f"Creating CoAP server on {config.COAP_HOST}:{config.COAP_PORT}")
+            logger.debug(f"Creating CoAP server on {config.COAP_HOST}:{config.COAP_PORT}")
             self.coap_server = CoapGatewayServer(
                 host=config.COAP_HOST,
                 port=config.COAP_PORT,
@@ -94,7 +94,7 @@ class CoAPConnectorService:
         if self.command_consumer:
             try:
                 await self.command_consumer.stop()
-                logger.info("Command consumer stopped")
+                logger.debug("Command consumer stopped")
             except Exception as e:
                 logger.error(f"Error stopping command consumer: {e}")
         
@@ -102,7 +102,7 @@ class CoAPConnectorService:
         if self.coap_server:
             try:
                 await self.coap_server.stop()
-                logger.info("CoAP server stopped")
+                logger.debug("CoAP server stopped")
             except Exception as e:
                 logger.error(f"Error stopping CoAP server: {e}")
         
@@ -110,7 +110,7 @@ class CoAPConnectorService:
         if self.kafka_msg_producer:
             try:
                 self.kafka_msg_producer.close(timeout=5)
-                logger.info("Kafka producer closed")
+                logger.debug("Kafka producer closed")
             except Exception as e:
                 logger.error(f"Error closing Kafka producer: {e}")
         

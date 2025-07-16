@@ -47,29 +47,29 @@ def get_connector_config(connector_id: str) -> Optional[Dict[str, Any]]:
 
 def get_translator_configs(connector_id: str) -> List[Dict[str, Any]]:
     """
-    Extract translator configurations for a specific connector.
+    Get translator configurations for a specific connector.
     
     Args:
-        connector_id: The ID of the connector (e.g., 'coap_preservarium')
+        connector_id: The connector ID to get configurations for
         
     Returns:
-        List of translator configuration dictionaries, sorted by priority
+        List of translator configurations or empty list if not found
     """
-    connector_config = get_connector_config(connector_id)
-    if not connector_config:
-        logger.warning(f"No configuration found for connector: {connector_id}")
+    config_data = load_connectors_config()
+    if not config_data:
         return []
+        
+    connectors = config_data.get('connectors', [])
     
-    translator_configs = connector_config.get('translators', [])
-    if not translator_configs:
-        logger.warning(f"No translator configurations found for connector: {connector_id}")
-        return []
+    # Find the connector with the specified ID
+    for connector in connectors:
+        if connector.get('connector_id') == connector_id:
+            translators = connector.get('translators', [])
+            logger.debug(f"Found {len(translators)} translator config(s) for connector: {connector_id}")
+            return translators
     
-    # Sort by priority (lower number = higher priority)
-    translator_configs.sort(key=lambda x: x.get('priority', 999))
-    
-    logger.info(f"Found {len(translator_configs)} translator config(s) for connector: {connector_id}")
-    return translator_configs
+    logger.warning(f"No connector found with ID: {connector_id}")
+    return []
 
 
 def get_connector_env(connector_id: str) -> Dict[str, Any]:

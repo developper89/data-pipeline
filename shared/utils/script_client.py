@@ -16,25 +16,23 @@ class ScriptClient:
     Supports local file system and can be extended for cloud storage (S3, etc.).
     """
     
-    def __init__(self, storage_type: str, local_dir: str = None):
+    def __init__(self, storage_type: str = "local", local_dir: str = "/tmp/parser_scripts"):
         """
         Initialize the script client.
         
         Args:
-            storage_type: Type of storage backend ('local', 's3', etc.)
-            local_dir: Directory path for local storage (required for 'local' type)
+            storage_type: Type of storage ("local" or "s3")
+            local_dir: Directory for local script storage
         """
-        self.storage_type = storage_type.lower()
+        self.storage_type = storage_type
         self.local_dir = local_dir
         
-        if self.storage_type == 'local':
-            if not local_dir:
-                raise ValueError("LOCAL_SCRIPT_DIR must be set for local storage type")
-            # Ensure base directory exists for writing/reading
-            os.makedirs(self.local_dir, exist_ok=True)
-            logger.info(f"Using local script storage in directory: {local_dir}")
-        elif self.storage_type != 's3':  # Modify if adding more types
-            raise ValueError(f"Unsupported SCRIPT_STORAGE_TYPE: {storage_type}")
+        if storage_type == "local":
+            # Ensure local directory exists
+            os.makedirs(local_dir, exist_ok=True)
+            logger.debug(f"Using local script storage in directory: {local_dir}")
+        else:
+            raise NotImplementedError(f"Storage type '{storage_type}' not implemented")
 
     async def get_module(self, script_ref: str):
         """

@@ -161,11 +161,10 @@ class ProtobufTranslator(BaseTranslator):
                     )
                     
                     if message_type:
-                        logger.info(f"✅ Successfully parsed using mapping: {mapped_message_type}")
                         device_id = self.device_id_extractor.extract(message_type, parsed_message)
                         
                         if device_id:
-                            logger.info(f"✅ Device ID extracted using path mapping: {device_id}")
+                            logger.debug(f"✅ Device ID extracted using path mapping: {device_id}")
                             return TranslationResult(
                                 success=True,
                                 device_id=device_id,

@@ -64,7 +64,7 @@ connectors:
       KAFKA_ERROR_TOPIC: "iot_errors"
       KAFKA_DEVICE_COMMANDS_TOPIC: "device_commands"
       COAP_BASE_DATA_PATH: ""
-      LOG_LEVEL: "DEBUG"
+      LOG_LEVEL: "INFO"
 
   - connector_id: "mqtt-connector"
     image: "mqtt-connector:latest"

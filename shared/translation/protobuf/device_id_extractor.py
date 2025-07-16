@@ -35,7 +35,7 @@ class ProtobufDeviceIdExtractor:
                 continue
 
             field_path = source.get('field_path')
-            logger.info(f"Trying extraction source {i+1}: {message_type}.{field_path}")
+            logger.debug(f"Trying extraction source {i+1}: {message_type}.{field_path}")
             
             device_id = self._extract_from_field_path(parsed_message, field_path, message_type)
 
@@ -43,7 +43,7 @@ class ProtobufDeviceIdExtractor:
                 if self._validate_device_id(device_id, field_path):
                     normalized_id = self._normalize_device_id(device_id)
                     self.last_source_used = f"{message_type}.{field_path}"
-                    logger.info(f"Successfully extracted device ID '{normalized_id}' from {self.last_source_used}")
+                    logger.debug(f"Successfully extracted device ID '{normalized_id}' from {self.last_source_used}")
                     return normalized_id
                 else:
                     logger.warning(f"Device ID '{device_id}' from {message_type}.{field_path} failed validation")

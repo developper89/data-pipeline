@@ -188,10 +188,9 @@ class DataRootResource(resource.Resource): # Inherit from Site for automatic chi
                         }
                     )
                     
-                    logger.info(f"[{request_id}] RawMessage created for device {translation_result.device_id}")
-                    
                     # Publish to Kafka
                     self.kafka_producer.publish_raw_message(raw_message)
+                    logger.info(f"[{request_id}] RawMessage published for device {translation_result.device_id}")
                     
                     # Check for pending commands after publishing the raw message
                     if self.command_consumer:

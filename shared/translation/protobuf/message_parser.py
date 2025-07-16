@@ -117,7 +117,7 @@ class ProtobufMessageParser:
             # Log available fields for debugging
             if hasattr(message, 'DESCRIPTOR'):
                 available_fields = [field.name for field in message.DESCRIPTOR.fields]
-                logger.debug(f"Parsed {message_type} has fields: {available_fields}")
+                # logger.debug(f"Parsed {message_type} has fields: {available_fields}")
             
             return message_type, message
         else:

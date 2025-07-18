@@ -19,18 +19,58 @@ class AlarmHandler:
     Evaluates alarm conditions and creates alerts when thresholds are met.
     """
     
-    def __init__(self, alarm_repository, alert_repository, kafka_producer=None):
+    def __init__(self, alarm_repository, alert_repository, datatype_repository, admin_user=None, kafka_producer=None):
         """
         Initialize the AlarmHandler with required repositories and optional Kafka producer.
         
         Args:
             alarm_repository: Repository for alarm CRUD operations
             alert_repository: Repository for alert CRUD operations 
+            datatype_repository: Repository for datatype operations
+            admin_user: Admin user for auto-created alarms
             kafka_producer: Optional Kafka producer for publishing alerts/alarms
         """
         self.alarm_repository = alarm_repository
         self.alert_repository = alert_repository
+        self.datatype_repository = datatype_repository
+        self.admin_user = admin_user
         self.kafka_producer = kafka_producer
+    
+    async def _get_datatype_by_label_cached(self, field_label: str, cache: Dict[str, Any], request_id: Optional[str] = None) -> Optional[Any]:
+        """
+        Get datatype by label with caching to avoid redundant database calls.
+        
+        Args:
+            field_label: The field label to search for
+            cache: Local cache for storing datatype results
+            request_id: Optional request ID for logging
+            
+        Returns:
+            Datatype object or None if not found
+        """
+        # Check cache first
+        if field_label in cache:
+            logger.debug(f"[{request_id}] Using cached datatype for field_label: {field_label}")
+            return cache[field_label]
+        
+        # If not in cache, fetch from database
+        try:
+            datatype = await self.datatype_repository.get_datatype_by_label(field_label)
+            
+            # Cache the result (even if None to avoid repeated failed lookups)
+            cache[field_label] = datatype
+            
+            if datatype:
+                logger.debug(f"[{request_id}] Cached datatype for field_label: {field_label}")
+            else:
+                logger.debug(f"[{request_id}] No datatype found for field_label: {field_label} - cached None result")
+                
+            return datatype
+            
+        except Exception as e:
+            logger.error(f"[{request_id}] Error fetching datatype for field_label {field_label}: {e}")
+            # Don't cache errors, allow retry on next call
+            return None
     
     def _get_language(self, request_id: Optional[str] = None) -> str:
         """
@@ -49,6 +89,7 @@ class AlarmHandler:
         self, 
         sensor_id: str,
         validated_data: ValidatedOutput,
+        script_module: Optional[Any] = None,
         request_id: Optional[str] = None
     ) -> Dict[str, Any]:
         """
@@ -57,6 +98,7 @@ class AlarmHandler:
         Args:
             sensor_id: The UUID of the sensor sending the data
             validated_data: ValidatedOutput object containing sensor measurements
+            script_module: Optional parser script module for device-specific alarm processing
             request_id: Optional request ID for tracing
             
         Returns:
@@ -69,10 +111,24 @@ class AlarmHandler:
             created_alert_ids = []
             triggered_alarms = []
             has_critical_status_alarm = False
-            
+            logger.debug(f"[{request_id}] Processing alarms for sensor {sensor_id} with validated data: {validated_data}")
             # Get datatype_id from validated data metadata
             data_datatype_id = validated_data.metadata['datatype_id']
-            
+            if hasattr(validated_data.metadata, 'alarms') and len(validated_data.metadata.get("alarms", [])) > 0:
+                # Process alarms for the sensor
+                await self._process_sensor_alarms(
+                    sensor_id, 
+                    validated_data, 
+                    script_module, 
+                    request_id
+                )
+            else:
+                logger.info(f"[{request_id}] No alarms XXX found for sensor {sensor_id}")
+                return {
+                    "alert_ids": created_alert_ids,
+                    "triggered_alarms": triggered_alarms,
+                    "has_critical_status_alarm": has_critical_status_alarm
+                }
             # Get active alarms for this sensor and datatype directly
             active_alarms = await self.alarm_repository.find_by(
                 sensor_id=str(sensor_id),
@@ -142,6 +198,7 @@ class AlarmHandler:
             }
             
         except Exception as e:
+            raise e
             logger.exception(f"[{request_id}] Error processing alarms for sensor {sensor_id}: {e}")
             return {
                 "alert_ids": [],
@@ -809,4 +866,183 @@ class AlarmHandler:
             return None
         except Exception as e:
             logger.error(f"Error getting sensor for alarm {alarm.id}: {e}")
-            return None 
+            return None
+    
+    async def _process_sensor_alarms(
+        self,
+        sensor_id: str,
+        validated_data: ValidatedOutput,
+        script_module: Any,
+        request_id: Optional[str] = None
+    ) -> None:
+        """
+        Process device alarms from validated data and convert them to standard alarms.
+        
+        Args:
+            sensor_id: The UUID of the sensor
+            validated_data: ValidatedOutput containing device data
+            script_module: Parser script module with parse_alarms function
+            request_id: Optional request ID for tracing
+        """
+        try:
+            logger.debug(f"[{request_id}] Processing alarms for sensor {sensor_id}")
+            
+            # Create local cache for datatype lookups during this processing session
+            datatype_cache: Dict[str, Any] = {}
+            
+            parsed_alarms = script_module.parse_alarms(validated_data.metadata.alarms)
+            available_alarm_count = validated_data.metadata.available_alarm_count
+            can_create_alarms = available_alarm_count > 0
+            if not can_create_alarms:
+                logger.debug(f"[{request_id}] No alarms can be created for sensor {sensor_id} because available_alarm_count is 0")
+                return
+            
+            # Process each alarm
+            for alarm in parsed_alarms:
+                try:
+                    # Get datatype information using cached method to avoid redundant database calls
+                    field_label = alarm['field_label']
+                    datatype = await self._get_datatype_by_label_cached(field_label, datatype_cache, request_id)
+                    
+                    if not datatype:
+                        logger.error(f"[{request_id}] No datatype found for field_label: {field_label}")
+                        continue
+                    
+                    # Check if this alarm already exists to avoid duplicates
+                    existing_alarm = await self._find_existing_alarm(
+                        sensor_id=sensor_id,
+                        datatype_id=str(datatype.id),
+                        parsed_alarm=alarm,
+                        request_id=request_id
+                    )
+                    
+                    if existing_alarm:
+                        logger.debug(f"[{request_id}] alarm already exists: {existing_alarm.name}")
+                        continue
+                    
+                    # Create complete standard alarm for database
+                    standard_alarm = await self._create_standard_alarm_from_basic(
+                        basic_alarm=alarm,
+                        sensor_id=sensor_id,
+                        datatype=datatype,
+                        request_id=request_id
+                    )
+                    
+                    # Create the alarm in the database
+                    alarm_id = await self.alarm_repository.create(standard_alarm)
+                    logger.info(f"[{request_id}] Created alarm {alarm_id}: {standard_alarm['name']}")
+                    
+                except Exception as e:
+                    logger.error(f"[{request_id}] Error processing individual alarm: {e}")
+                    continue
+            
+        except Exception as e:
+            logger.error(f"[{request_id}] Error processing alarms: {e}")
+            raise
+    
+    async def _create_standard_alarm_from_basic(
+        self,
+        basic_alarm: Dict[str, Any],
+        sensor_id: str,
+        datatype: Any,
+        request_id: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Create a complete standard alarm from basic alarm structure and validated data.
+        
+        Args:
+            basic_alarm: Basic alarm structure from parser conversion
+            sensor_id: UUID string of the sensor
+            datatype: Datatype object for the alarm
+            request_id: Optional request ID for tracing
+            
+        Returns:
+            Dictionary containing complete standard alarm data for database insertion
+        """
+        try:
+            
+            # Find the index of the field_label in the labels array
+            try:
+                field_index = datatype.labels.index(basic_alarm['field_label'])
+            except ValueError:
+                logger.error(f"[{request_id}] Field label '{basic_alarm['field_label']}' not found in datatype labels: {datatype.labels}")
+                raise ValueError(f"Field label '{basic_alarm['field_label']}' not found in datatype labels")
+            
+            # Use the same index to get corresponding values from other arrays
+            field_name = datatype.display_names[field_index] if field_index < len(datatype.display_names) else f"Field {field_index}"
+            field_unit = datatype.unit[field_index] if field_index < len(datatype.unit) else ""
+            field_type = datatype.data_type[field_index] if field_index < len(datatype.data_type) else "number"
+            
+            # Generate alarm name and description
+            alarm_name = f"{field_name} {basic_alarm['math_operator']} {basic_alarm['threshold']}"
+            if field_unit:
+                alarm_name += f" {field_unit}"
+            
+            description = f"Auto generated alarm: {field_name}"
+            
+            # Create complete standard alarm for database
+            standard_alarm = {
+                'name': alarm_name,
+                'description': description,
+                'active': True,
+                'threshold': basic_alarm['threshold'],
+                'field_name': field_name,
+                'field_label': basic_alarm['field_label'],
+                'field_unit': field_unit,
+                'field_type': field_type,
+                'datatype_id': str(datatype.id),
+                'sensor_id': str(sensor_id),
+                'alarm_type': basic_alarm['alarm_type'],
+                'math_operator': basic_alarm['math_operator'],
+                'level': basic_alarm['level'],
+                'user_id': str(self.admin_user.id),  # Use admin user for auto-created alarms
+                'recipients': None,
+                'notify_creator': True,
+                'mq_published_at': None,
+                'is_device_alarm': True
+            }
+            
+            return standard_alarm
+            
+        except Exception as e:
+            logger.error(f"[{request_id}] Error creating standard alarm from basic alarm: {e}")
+            raise
+    
+    async def _find_existing_alarm(
+        self,
+        sensor_id: str,
+        datatype_id: str,
+        parsed_alarm: Dict[str, Any],
+        request_id: Optional[str] = None
+    ) -> Optional[Any]:
+        """
+        Check if an alarm with similar characteristics already exists.
+        
+        Args:
+            sensor_id: UUID string of the sensor
+            datatype_id: UUID string of the datatype
+            parsed_alarm: Parsed alarm structure to check for duplicates
+            request_id: Optional request ID for tracing
+            
+        Returns:
+            Existing alarm object or None if not found
+        """
+        try:
+            # Search for existing alarms with similar characteristics
+            existing_alarms = await self.alarm_repository.find_by(
+                sensor_id=sensor_id,
+                datatype_id=datatype_id,
+                alarm_type=parsed_alarm['alarm_type'],
+                math_operator=parsed_alarm['math_operator'],
+                threshold=parsed_alarm['threshold'],
+                field_label=parsed_alarm['field_label'],
+                is_device_alarm=True
+            )
+            
+            # Return the first matching alarm if any exist
+            return existing_alarms[0] if existing_alarms else None
+            
+        except Exception as e:
+            logger.error(f"[{request_id}] Error checking for existing alarm: {e}")
+            return None
+   

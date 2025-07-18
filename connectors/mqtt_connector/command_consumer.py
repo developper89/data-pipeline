@@ -4,9 +4,12 @@ import json
 import asyncio
 from typing import Dict, Any, Optional
 
+from shared.config_loader import get_translator_configs
+from shared.models.common import CommandMessage
 from shared.mq.kafka_helpers import AsyncResilientKafkaConsumer
 from client import MQTTClientWrapper
 import config
+from shared.translation.factory import TranslatorFactory
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +30,7 @@ class CommandConsumer:
         self.resilient_consumer = None  # Use AsyncResilientKafkaConsumer
         self.running = False
         self._consumer_task = None
+        self._translator_cache = {}
 
     async def start(self):
         """Start the command consumer with AsyncResilientKafkaConsumer."""
@@ -92,6 +96,70 @@ class CommandConsumer:
             logger.exception(f"Fatal error in command consumer: {e}")
             self.running = False
 
+    async def _format_command_with_parser(self, device_id: str, command_message: CommandMessage) -> Optional[dict]:
+        """
+        Format command and response using device-specific parser from translator.
+        
+        Args:
+            device_id: Target device identifier
+            command_message: CommandMessage object containing:
+                - device_id: Target device identifier
+                - command_type: Type of command (e.g., "alarm", "config")
+                - payload: Command-specific data
+                - protocol: Communication protocol
+                - metadata: Optional metadata containing manufacturer information
+            
+        Returns:
+            dict: command_dict or None if formatting fails
+        """
+        try:
+            # Get metadata from command message
+            metadata = command_message.metadata
+            manufacturer = metadata.get('manufacturer')
+            command_type = command_message.command_type
+            logger.debug(f"Formatting command for device {device_id} {command_message.model_dump()}")
+            # Get translator instance based on command type and manufacturer
+            translator = await self._get_translator_for_manufacturer(command_type, manufacturer)
+            if not translator:
+                logger.error(f"No translator found for device {device_id} with manufacturer {manufacturer}")
+                return None
+
+            # Get script module from translator
+            script_module = None
+            if hasattr(translator, 'script_module') and translator.script_module:
+                script_module = translator.script_module
+            elif hasattr(translator, 'parser_script_path') and translator.parser_script_path:
+                # Try to load the script module if it's not already loaded
+                try:
+                    await translator.load_script_module_async()
+                    script_module = translator.script_module
+                except Exception as e:
+                    logger.error(f"Failed to load script module for translator: {e}")
+                    return None
+
+            if not script_module:
+                logger.error(f"No script module available for device {device_id}")
+                return None
+
+            # Check if parser supports command formatting
+            if not hasattr(script_module, 'format_command'):
+                logger.error(f"Parser for device {device_id} does not support command formatting")
+                return None
+
+            # Format command using parser - convert CommandMessage to dict for parser
+            
+            # Format command
+            command_dict = script_module.format_command(
+                command=command_message.model_dump(),
+                config={}
+            )
+
+            return command_dict
+
+        except Exception as e:
+            logger.exception(f"Error formatting command and response for device {device_id}: {e}")
+            return None
+        
     async def _process_command_message(self, message):
         """
         Process a single command message.
@@ -104,7 +172,8 @@ class CommandConsumer:
         """
         try:
             # Process the command
-            success = await self._process_command(message.parsed_value)
+            command_message = CommandMessage(**message.parsed_value)
+            success = await self._process_command(command_message)
             return success
             
         except Exception as e:
@@ -116,7 +185,7 @@ class CommandConsumer:
         logger.error(f"Consumer error: {error}")
         # Could implement additional error handling logic here if needed
     
-    async def _process_command(self, command_data: Dict[str, Any]) -> bool:
+    async def _process_command(self, command_data: CommandMessage) -> bool:
         """
         Process a command message and publish it to MQTT.
         
@@ -128,16 +197,20 @@ class CommandConsumer:
         """
         try:
             # Check if this is an MQTT command
-            if command_data.get('protocol', '').lower() != 'mqtt':
-                logger.debug(f"Ignoring non-MQTT command: {command_data.get('protocol')}")
+            if command_data.protocol.lower() != 'mqtt':
+                logger.debug(f"Ignoring non-MQTT command: {command_data.protocol}")
                 return True  # Successfully ignored
                 
             # Extract required fields
-            device_id = command_data.get('device_id')
-            payload = command_data.get('payload')
-            request_id = command_data.get('request_id', 'unknown')
-            metadata = command_data.get('metadata', {})
+            device_id = command_data.device_id
+            payload = command_data.payload
+            request_id = command_data.request_id
+            formatted_data = await self._format_command_with_parser(device_id, command_data)
+            if not formatted_data:
+                logger.error(f"[{request_id}] Failed to format command for device {device_id}")
+                return False
             
+            metadata = formatted_data.get('metadata', {})
             # Extract topic from metadata (required for MQTT)
             topic = metadata.get('topic', None)
             if not topic:
@@ -159,7 +232,7 @@ class CommandConsumer:
                 None,
                 self.mqtt_client.publish_message,
                 topic,
-                payload,
+                formatted_data.get('payload', {}),
                 qos,
                 retain
             )
@@ -174,3 +247,71 @@ class CommandConsumer:
         except Exception as e:
             logger.exception(f"Error processing command: {e}")
             return False 
+        
+    async def _get_translator_for_manufacturer(self, command_type: str = None, manufacturer: str = None):
+        """Get translator instance for device based on command type and manufacturer."""
+        cache_key = f"{manufacturer}_translator"
+        if cache_key in self._translator_cache:
+            logger.debug(f"Translator for {cache_key} found in cache")
+            return self._translator_cache[cache_key]
+
+        try:
+            # Get translator configs for mqtt-connector
+            translator_configs = get_translator_configs("mqtt-connector")
+
+            # Find appropriate translator based on manufacturer and command type
+            selected_translator_config = None
+            
+            for translator_config in translator_configs:
+                config_details = translator_config.get('config', {})
+                
+                # Check manufacturer match first (most important)
+                config_manufacturer = config_details.get('manufacturer', '')
+                if manufacturer and config_manufacturer != manufacturer:
+                    continue
+                
+                # Check if this translator supports the command type
+                command_formatting = config_details.get('command_formatting', {})
+                if command_formatting and command_type:
+                    supported_commands = command_formatting.get('validation', {}).get('supported_commands', [])
+                    if command_type in supported_commands:
+                        selected_translator_config = translator_config
+                        break
+                elif not command_type:
+                    # If no specific command type, use first matching manufacturer
+                    selected_translator_config = translator_config
+                    break
+            
+            # Fallback to first matching manufacturer if no command type match
+            if not selected_translator_config and manufacturer:
+                for translator_config in translator_configs:
+                    config_details = translator_config.get('config', {})
+                    config_manufacturer = config_details.get('manufacturer', '')
+                    if config_manufacturer == manufacturer:
+                        selected_translator_config = translator_config
+                        break
+            
+            # Final fallback to first available translator
+            if not selected_translator_config and translator_configs:
+                selected_translator_config = translator_configs[0]
+
+            if selected_translator_config:
+                translator = TranslatorFactory.create_translator(selected_translator_config)
+                
+                # Load script module if translator has parser_script_path
+                if hasattr(translator, 'parser_script_path') and translator.parser_script_path:
+                    try:
+                        await translator.load_script_module_async()
+                        logger.debug(f"Loaded script module for translator '{manufacturer}', command_type '{command_type}'")
+                    except Exception as e:
+                        logger.warning(f"Failed to load script module for translator: {e}")
+                
+                self._translator_cache[cache_key] = translator
+                logger.debug(f"Created translator for manufacturer '{manufacturer}', command_type '{command_type}'")
+            else:
+                logger.error(f"No suitable translator configuration found for manufacturer '{manufacturer}', command_type '{command_type}'")
+                return None
+
+        except Exception as e:
+            logger.error(f"Failed to create translator: {e}")
+            return None

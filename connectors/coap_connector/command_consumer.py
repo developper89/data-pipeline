@@ -216,7 +216,7 @@ class CommandConsumer:
             command_type = command_message.command_type
             logger.debug(f"Formatting command for device {device_id} {command_message.model_dump()}")
             # Get translator instance based on command type and manufacturer
-            translator = await self._get_translator_for_device(device_id, command_type, manufacturer)
+            translator = await self._get_translator_for_manufacturer(command_type, manufacturer)
             if not translator:
                 logger.error(f"No translator found for device {device_id} with manufacturer {manufacturer}")
                 return None
@@ -261,7 +261,7 @@ class CommandConsumer:
 
 # Removed _get_parser_module method - now using script module directly from translator
 
-    async def _get_translator_for_device(self, device_id: str, command_type: str = None, manufacturer: str = None):
+    async def _get_translator_for_manufacturer(self, command_type: str = None, manufacturer: str = None):
         """Get translator instance for device based on command type and manufacturer."""
         cache_key = f"{manufacturer}_translator"
         if cache_key in self._translator_cache:

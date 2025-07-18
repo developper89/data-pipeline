@@ -164,10 +164,15 @@ class ProtobufTranslator(BaseTranslator):
                         
                         if device_id:
                             logger.debug(f"✅ Device ID extracted using path mapping: {device_id}")
+                            # Get device_type from the extraction source if available
+                            device_type = self.device_id_extractor.get_device_type_for_source(self.device_id_extractor.last_source_used)
                             return TranslationResult(
                                 success=True,
                                 device_id=device_id,
+                                device_type=device_type,
                                 translator_used=f"protobuf_{self.manufacturer}",
+                                translator_type="protobuf",
+                                translator=self,
                                 metadata={
                                     "manufacturer": self.manufacturer,
                                     "message_type": message_type,
@@ -196,10 +201,15 @@ class ProtobufTranslator(BaseTranslator):
 
             if device_id:
                 logger.info(f"Successfully extracted device ID: {device_id}")
+                # Get device_type from the extraction source if available
+                device_type = self.device_id_extractor.get_device_type_for_source(self.device_id_extractor.last_source_used)
                 return TranslationResult(
                     success=True,
                     device_id=device_id,
+                    device_type=device_type,
                     translator_used=f"protobuf_{self.manufacturer}",
+                    translator_type="protobuf",
+                    translator=self,
                     metadata={
                         "manufacturer": self.manufacturer,
                         "message_type": message_type,

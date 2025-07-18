@@ -140,4 +140,37 @@ class ProtobufDeviceIdExtractor:
             if device_id != original_id:
                 logger.debug(f"Normalized device ID: '{original_id}' -> '{device_id}'")
 
-        return device_id 
+        return device_id
+    
+    def get_device_type_for_source(self, source_used: str) -> Optional[str]:
+        """
+        Get device_type from the source configuration that was used for extraction.
+        
+        Args:
+            source_used: Source identifier like "measurements.serial_num"
+            
+        Returns:
+            Device type or None if not found
+        """
+        if not source_used:
+            return None
+            
+        # Parse the source identifier (e.g., "measurements.serial_num")
+        parts = source_used.split('.')
+        if len(parts) < 2:
+            return None
+            
+        message_type = parts[0]
+        field_path = '.'.join(parts[1:])
+        
+        # Find the matching source configuration
+        for source in self.sources:
+            if (source.get('message_type') == message_type and 
+                source.get('field_path') == field_path):
+                device_type = source.get('device_type')
+                if device_type:
+                    logger.debug(f"Found device_type '{device_type}' for source '{source_used}'")
+                    return device_type
+                    
+        logger.debug(f"No device_type found for source '{source_used}'")
+        return None 

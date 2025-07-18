@@ -30,6 +30,9 @@ from preservarium_sdk.infrastructure.sql_repository.sql_datatype_repository impo
 from preservarium_sdk.infrastructure.sql_repository.sql_sensor_repository import (
     SQLSensorRepository,
 )
+from preservarium_sdk.infrastructure.sql_repository.sql_broker_repository import (
+    SQLBrokerRepository,
+)
 from preservarium_sdk.infrastructure.sql_repository.sql_hardware_repository import (
     SQLHardwareRepository,
 )
@@ -38,6 +41,9 @@ from preservarium_sdk.infrastructure.sql_repository.sql_alarm_repository import 
 )
 from preservarium_sdk.infrastructure.sql_repository.sql_alert_repository import (
     SQLAlertRepository,
+)
+from preservarium_sdk.infrastructure.sql_repository.sql_user_repository import (
+    SQLUserRepository,
 )
 
 # Import local components
@@ -62,14 +68,17 @@ class NormalizerService:
         sensor_repository: Optional[SQLSensorRepository] = None,
         hardware_repository: Optional[SQLHardwareRepository] = None,
         alarm_repository: Optional[SQLAlarmRepository] = None,
-        alert_repository: Optional[SQLAlertRepository] = None
+        alert_repository: Optional[SQLAlertRepository] = None,
+        user_repository: Optional[SQLUserRepository] = None,
+        broker_repository: Optional[SQLBrokerRepository] = None
     ):
         self.datatype_repository = datatype_repository
         self.sensor_repository = sensor_repository
         self.hardware_repository = hardware_repository
         self.alarm_repository = alarm_repository
         self.alert_repository = alert_repository
-        
+        self.user_repository = user_repository
+        self.broker_repository = broker_repository
         # Use AsyncResilientKafkaConsumer instead of manual consumer management
         self.resilient_consumer = None
         self.kafka_producer: Optional[NormalizerKafkaProducer] = None
@@ -86,14 +95,8 @@ class NormalizerService:
         else:
             logger.warning("Validator not initialized - datatype repository not provided")
             
-        # Initialize alarm handler if repositories are provided
+        # Alarm handler will be initialized in run() method with admin user
         self.alarm_handler = None
-        if alarm_repository and alert_repository:
-            # Note: kafka_producer will be set later in run() method
-            self.alarm_handler = AlarmHandler(alarm_repository, alert_repository, self.kafka_producer)
-            logger.info("Alarm handler initialized with alarm and alert repositories")
-        else:
-            logger.warning("Alarm handler not initialized - alarm or alert repository not provided")
             
         self._running = False
         self._stop_event = asyncio.Event()
@@ -104,6 +107,37 @@ class NormalizerService:
         
         # Translator instance cache to avoid recreating translators for each message
         self.translator_cache: Dict[str, Any] = {}
+        
+    async def _initialize_alarm_handler(self):
+        """Initialize the alarm handler with all required dependencies including admin user."""
+        if self.alarm_repository and self.alert_repository and self.datatype_repository:
+            try:
+                # Get admin user if user repository is available
+                admin_user = None
+                if self.user_repository:
+                    admin_user = await self.user_repository.get_first_admin_user()
+                    if admin_user:
+                        logger.info(f"Admin user found for alarm handler: {admin_user.username}")
+                    else:
+                        logger.warning("No admin user found in the system")
+                
+                # Create alarm handler with all dependencies
+                self.alarm_handler = AlarmHandler(
+                    alarm_repository=self.alarm_repository,
+                    alert_repository=self.alert_repository,
+                    datatype_repository=self.datatype_repository,
+                    admin_user=admin_user,
+                    kafka_producer=self.kafka_producer
+                )
+                
+                logger.info("Alarm handler initialized with all dependencies")
+                
+            except Exception as e:
+                logger.error(f"Failed to initialize alarm handler: {e}")
+                # Continue without alarm handler
+                self.alarm_handler = None
+        else:
+            logger.warning("Alarm handler not initialized - required repositories not provided")
 
     async def _process_message(self, raw_msg_record) -> bool:
         """
@@ -143,14 +177,22 @@ class NormalizerService:
                 raw_message = RawMessage(**job_dict)
 
                 # Find the sensor using parameter field
-                sensor = await self.sensor_repository.find_one_by(parameter=raw_message.device_id)
-                if not sensor:
-                    logger.debug(f"[{request_id}] No sensor found with parameter {raw_message.device_id}")
-                    return True
+                if raw_message.device_type == "sensor":
+                    device = await self.sensor_repository.find_one_by(parameter=raw_message.device_id)
+                    if not device:
+                        logger.debug(f"[{request_id}] No sensor found with parameter {raw_message.device_id}")
+                        return True
+                    if not device.recording or not device.active:
+                        logger.warning(f"[{request_id}] Sensor {raw_message.device_id} is not recording")
+                        return True
                 
-                if not sensor.recording or not sensor.active:
-                    logger.warning(f"[{request_id}] Sensor {raw_message.device_id} is not recording")
-                    return True
+                if raw_message.device_type == "broker":
+                    device = await self.broker_repository.find_one_by(parameter=raw_message.device_id)
+                    if not device:
+                        logger.debug(f"[{request_id}] No broker found with parameter {raw_message.device_id}")
+                        return True
+                
+                
                 
                 
                 # if raw_message.device_id == "2207001":
@@ -286,7 +328,7 @@ class NormalizerService:
                 
                 # Get all datatypes for this device (via hardware association)
                 
-                device_datatypes = await self._get_device_datatypes(sensor, request_id)
+                device_datatypes = await self._get_device_datatypes(device, request_id)
 
                 if device_datatypes:
                     logger.debug(f"[{request_id}] Found {len(device_datatypes)} datatypes for device {raw_message.device_id}")
@@ -341,33 +383,45 @@ class NormalizerService:
                         # We've already published individual errors, so we're done
                         return True
                     else:
-                        # No valid outputs and no errors - this is strange
-                        logger.error(f"[{request_id}] No valid outputs and no validation errors for device {raw_message.device_id}")
-                        await self._publish_processing_error(
-                            "Empty Validation Result",
-                            error="No valid outputs produced and no validation errors reported",
-                            original_message=job_dict,
-                            request_id=request_id,
-                            topic_details=(topic, partition, offset),
-                        )
-                        return True
+                        # Check if parser returned empty results (which is legitimate)
+                        if len(parser_output_list) == 0:
+                            # Parser successfully executed but produced no sensor readings
+                            # This is legitimate for configuration messages, acknowledgments, etc.
+                            logger.debug(f"[{request_id}] Parser successfully executed but produced no sensor readings for device {raw_message.device_id}")
+                            return True
+                        else:
+                            # Parser produced data but validation failed to produce any valid outputs
+                            # This suggests a validation issue
+                            logger.error(f"[{request_id}] Parser produced {len(parser_output_list)} records but validation produced no valid outputs for device {raw_message.device_id}")
+                            await self._publish_processing_error(
+                                "Validation Failed to Produce Valid Outputs",
+                                error=f"Parser produced {len(parser_output_list)} records but validation produced no valid outputs",
+                                original_message=job_dict,
+                                request_id=request_id,
+                                details={"parser_output_count": len(parser_output_list)},
+                                topic_details=(topic, partition, offset),
+                            )
+                            return True
                 
                 logger.debug(f"[{request_id}] Validated {len(validated_data_list)} validated outputs.")
                 
                 # 6.5 Process alarms for validated data
                 try:
+                    logger.debug(f"[{request_id}] Processing alarms for device {raw_message.device_id}")
                     if self.alarm_handler and validated_data_list:
+                        logger.debug(f"[{request_id}] Alarm handler available and validated data list is not empty")
                         total_alerts_created = []
                         any_critical_status_alarm = False
-                        
+                        logger.info(f"[{request_id}] Validated data list: {validated_data_list}")
                         for validated_data in validated_data_list:
                             # Process alarms for each validated output
                             alarm_result = await self.alarm_handler.process_alarms(
-                                sensor_id=str(sensor.id),
+                                sensor_id=str(device.id),
                                 validated_data=validated_data,
+                                script_module=script_module,
                                 request_id=request_id
                             )
-                            
+                            logger.info(f"alarm result: {alarm_result}")
                             # Extract results from the returned dictionary
                             alert_ids = alarm_result.get("alert_ids", [])
                             triggered_alarms = alarm_result.get("triggered_alarms", [])
@@ -785,10 +839,8 @@ class NormalizerService:
             raw_producer = create_kafka_producer(config.KAFKA_BOOTSTRAP_SERVERS)
             self.kafka_producer = NormalizerKafkaProducer(raw_producer)
             
-            # Set kafka producer on alarm handler if available
-            if self.alarm_handler:
-                self.alarm_handler.kafka_producer = self.kafka_producer
-                logger.debug("Kafka producer set on alarm handler")
+            # Initialize admin user and alarm handler
+            await self._initialize_alarm_handler()
 
             # Create resilient consumer with automatic error handling
             self.resilient_consumer = AsyncResilientKafkaConsumer(

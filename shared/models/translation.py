@@ -21,6 +21,7 @@ class TranslationResult:
     """Result of device ID extraction/translation operation."""
     success: bool
     device_id: Optional[str] = None
+    device_type: Optional[str] = None
     translator_used: Optional[str] = None
     translator_type: Optional[str] = None
     translator: Optional['BaseTranslator'] = None  # The actual translator instance

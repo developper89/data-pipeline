@@ -289,6 +289,7 @@ class DataRootResource(resource.Resource):
                 timestamp=datetime.now(timezone.utc),
                 payload_hex=request.payload.hex(),
                 protocol="coap",
+                device_type=translation_result.device_type,  # Pass device_type from translation result
                 metadata={
                     "protocol": "coap",
                     "source": request_info['source'],

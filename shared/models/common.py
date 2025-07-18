@@ -36,6 +36,7 @@ class RawMessage(BaseMessage):
     device_id: str
     payload_hex: str  # Renamed from 'payload' to reflect hex-encoded binary data sent through Kafka
     protocol: str   # e.g., 'mqtt', 'coap'
+    device_type: Optional[str] = None  # Type of device (sensor, broker, etc.)
     metadata: dict = {} # Optional extra metadata from gateway
 
 class ErrorMessage(BaseMessage):

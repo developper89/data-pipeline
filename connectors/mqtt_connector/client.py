@@ -176,13 +176,13 @@ class MQTTClientWrapper:
         logger.info("Cleaning up certificates...")
         self.cert_manager.cleanup()
 
-    def publish_message(self, topic: str, payload, qos=None, retain=None):
+    def publish_message(self, topic: str, payload: dict, qos=None, retain=None):
         """
         Publish a message to an MQTT topic.
         
         Args:
             topic: The MQTT topic to publish to
-            payload: The message payload (string, dict, or bytes)
+            payload: The message payload (dict)
             qos: Quality of Service (0, 1, or 2)
             retain: Whether to retain the message
             
@@ -201,14 +201,10 @@ class MQTTClientWrapper:
             
         try:
             # Convert dict payload to JSON string
-            if isinstance(payload, dict):
-                payload = json.dumps(payload)
+            payload = json.dumps(payload)
             
-            # Convert string to bytes if needed
-            if isinstance(payload, str):
-                payload = payload.encode('utf-8')
-                
-            logger.debug(f"Publishing to MQTT topic '{topic}' (QoS: {qos}, Retain: {retain})")
+            logger.debug(f"Publishing to MQTT topic '{topic}' (QoS: {qos}, Retain: {retain}), payload: {payload}")
+            return True
             result = self.client.publish(topic, payload, qos=qos, retain=retain)
             
             # Check if the message was queued successfully
@@ -346,6 +342,7 @@ class MQTTClientWrapper:
                 device_id=result.device_id,
                 payload_hex=payload_str,  # Updated field name from payload to payload_hex
                 protocol="mqtt",
+                device_type=result.device_type,  # Pass device_type from translation result
                 metadata={
                     "protocol": "mqtt",
                     "mqtt_topic": msg.topic,

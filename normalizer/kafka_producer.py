@@ -6,7 +6,7 @@ from confluent_kafka import Producer, KafkaError, KafkaException
 
 # Import shared components
 from shared.mq.kafka_helpers import publish_message, create_kafka_producer
-from shared.models.common import ErrorMessage, ValidatedOutput, AlertMessage, AlarmMessage
+from shared.models.common import ErrorMessage, ValidatedOutput, AlertMessage, AlarmMessage, CommandMessage
 
 # Import local config
 import config
@@ -169,6 +169,36 @@ class NormalizerKafkaProducer:
             raise
         except Exception as e:
             logger.exception(f"[{message.request_id}] Unexpected error publishing AlarmMessage to Kafka topic '{topic}': {e}")
+            raise
+
+    def publish_command(self, message: CommandMessage):
+        """
+        Publishes a CommandMessage to the configured device commands topic.
+
+        Args:
+            message: The CommandMessage object to publish.
+
+        Raises:
+            KafkaException: If publishing fails due to Kafka-related issues.
+            Exception: For other unexpected publishing errors.
+        """
+        if not isinstance(message, CommandMessage):
+            raise TypeError("Message must be an instance of CommandMessage")
+
+        try:
+            # Use device_id as the key for partitioning command messages
+            key = message.device_id
+            topic = config.KAFKA_DEVICE_COMMANDS_TOPIC
+            value = message.model_dump()
+
+            logger.debug(f"[{message.request_id}] Publishing CommandMessage to topic '{topic}' with key '{key}'")
+            publish_message(self.producer, topic, value, key)
+
+        except KafkaException as e:
+            logger.error(f"[{message.request_id}] Failed to publish CommandMessage to Kafka topic '{topic}': {e}")
+            raise
+        except Exception as e:
+            logger.exception(f"[{message.request_id}] Unexpected error publishing CommandMessage to Kafka topic '{topic}': {e}")
             raise
 
     def flush(self, timeout: Optional[float] = None):

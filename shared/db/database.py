@@ -11,8 +11,19 @@ database_url = os.getenv("DATABASE_URL")
 if not database_url:
     raise ValueError("DATABASE_URL environment variable must be set")
 
-# Create async engine
-async_engine = create_async_engine(str(database_url), echo=False)
+# Create async engine with timeout configurations
+async_engine = create_async_engine(
+    str(database_url), 
+    echo=False,
+    connect_args={
+        "command_timeout": 30,  # Query timeout
+        "server_settings": {
+            "statement_timeout": "30s",  # Statement timeout
+            "idle_in_transaction_session_timeout": "60s",  # Auto-kill stuck transactions
+            "lock_timeout": "30s",  # Lock timeout
+        },
+    }
+)
 
 # Create async session factory
 async_session_factory = async_sessionmaker(

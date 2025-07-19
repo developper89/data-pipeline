@@ -14,12 +14,15 @@ connectors:
             sources:
               - message_type: "measurements"
                 field_path: "serial_num"
+                action: "parse"
                 priority: 2
               - message_type: "device_info"
                 field_path: "serial_num"
+                action: "parse"
                 priority: 1
               - message_type: "config"
                 field_path: "serial_number"
+                action: "parse"
                 priority: 3
             validation:
               regex: "^[a-fA-F0-9]{8,64}$"
@@ -88,6 +91,7 @@ connectors:
               - type: "path_pattern"
                 pattern: "broker_data/+/{device_id}/data"
                 device_type: "sensor"
+                action: "parse"
                 priority: 1
                 validation:
                   min_length: 3
@@ -98,6 +102,7 @@ connectors:
               - type: "path_pattern"
                 pattern: "broker_data/{device_id}/feedback"
                 device_type: "broker"
+                action: "parse_feedback"
                 priority: 2
                 validation:
                   min_length: 3

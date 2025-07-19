@@ -173,4 +173,37 @@ class ProtobufDeviceIdExtractor:
                     return device_type
                     
         logger.debug(f"No device_type found for source '{source_used}'")
+        return None
+
+    def get_action_for_source(self, source_used: str) -> Optional[str]:
+        """
+        Get action from the source configuration that was used for extraction.
+        
+        Args:
+            source_used: Source identifier like "measurements.serial_num"
+            
+        Returns:
+            Action/method name or None if not found
+        """
+        if not source_used:
+            return None
+            
+        # Parse the source identifier (e.g., "measurements.serial_num")
+        parts = source_used.split('.')
+        if len(parts) < 2:
+            return None
+            
+        message_type = parts[0]
+        field_path = '.'.join(parts[1:])
+        
+        # Find the matching source configuration
+        for source in self.sources:
+            if (source.get('message_type') == message_type and 
+                source.get('field_path') == field_path):
+                action = source.get('action')
+                if action:
+                    logger.debug(f"Found action '{action}' for source '{source_used}'")
+                    return action
+                    
+        logger.debug(f"No action found for source '{source_used}'")
         return None 

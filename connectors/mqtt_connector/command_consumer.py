@@ -2,7 +2,8 @@
 import logging
 import json
 import asyncio
-from typing import Dict, Any, Optional
+import time
+from typing import Dict, Any, List, Optional
 
 from shared.config_loader import get_translator_configs
 from shared.models.common import CommandMessage
@@ -31,6 +32,7 @@ class CommandConsumer:
         self.running = False
         self._consumer_task = None
         self._translator_cache = {}
+        self.pending_commands: Dict[str, List[Dict[str, Any]]] = {}
 
     async def start(self):
         """Start the command consumer with AsyncResilientKafkaConsumer."""
@@ -201,14 +203,24 @@ class CommandConsumer:
                 logger.debug(f"Ignoring non-MQTT command: {command_data.protocol}")
                 return True  # Successfully ignored
                 
+            # Handle feedback acknowledgment
+            if command_data.command_type == "feedback":
+                logger.info(f"[{command_data.request_id}] Received feedback acknowledgment for device {command_data.device_id}")
+                # TODO: Implement feedback acknowledgment logic here
+                # This could involve updating command status, notifying waiting processes, etc.
+                return True  # Successfully processed feedback
+                
             # Extract required fields
             device_id = command_data.device_id
             payload = command_data.payload
             request_id = command_data.request_id
             formatted_data = await self._format_command_with_parser(device_id, command_data)
-            if not formatted_data:
-                logger.error(f"[{request_id}] Failed to format command for device {device_id}")
-                return False
+            if formatted_data:
+                await self._store_formatted_command(device_id, command_data, formatted_data)
+                logger.info(f"[{request_id}] Formatted and stored command with response for device {device_id}")
+            else:
+                logger.error(f"[{request_id}] Unable to format command and response for device {device_id}: parser script not found or formatting failed")
+                return True  # Consider this as processed (won't retry)
             
             metadata = formatted_data.get('metadata', {})
             # Extract topic from metadata (required for MQTT)
@@ -247,7 +259,49 @@ class CommandConsumer:
         except Exception as e:
             logger.exception(f"Error processing command: {e}")
             return False 
+    
+    async def _store_formatted_command(self, device_id: str, command_message: CommandMessage, formatted_data: Any):
+        """Store a command formatted by parser."""
         
+        # Update command data with formatted payload and response
+        enhanced_command = command_message.model_dump()
+        enhanced_command['payload'] = {
+            'formatted_command': formatted_data,
+            'formatted_by': 'parser',
+            'original_payload': command_message.payload
+        }
+        enhanced_command['stored_at'] = time.time()
+
+        # Store the enhanced command
+        if device_id not in self.pending_commands:
+            self.pending_commands[device_id] = []
+        self.pending_commands[device_id].append(enhanced_command)
+    
+    def acknowledge_command(self, device_id: str, command_id: str) -> bool:
+        """
+        Acknowledge that a command has been delivered to a device.
+        Removes the command from the pending list.
+        
+        Args:
+            device_id: The device ID the command was for
+            command_id: The unique identifier of the command (request_id)
+            
+        Returns:
+            True if the command was found and removed, False otherwise
+        """
+        if device_id not in self.pending_commands:
+            return False
+            
+        # Find the command by request_id
+        for i, command in enumerate(self.pending_commands[device_id]):
+            if command.get('request_id') == command_id:
+                # Remove it from the list
+                self.pending_commands[device_id].pop(i)
+                logger.info(f"Command {command_id} for device {device_id} acknowledged")
+                return True
+                
+        return False
+      
     async def _get_translator_for_manufacturer(self, command_type: str = None, manufacturer: str = None):
         """Get translator instance for device based on command type and manufacturer."""
         cache_key = f"{manufacturer}_translator"

@@ -22,6 +22,7 @@ class TranslationResult:
     success: bool
     device_id: Optional[str] = None
     device_type: Optional[str] = None
+    action: Optional[str] = None  # Script module action/method to call
     translator_used: Optional[str] = None
     translator_type: Optional[str] = None
     translator: Optional['BaseTranslator'] = None  # The actual translator instance

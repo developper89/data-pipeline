@@ -343,6 +343,7 @@ class MQTTClientWrapper:
                 payload_hex=payload_str,  # Updated field name from payload to payload_hex
                 protocol="mqtt",
                 device_type=result.device_type,  # Pass device_type from translation result
+                action=result.action,  # Pass action from translation result as critical field
                 metadata={
                     "protocol": "mqtt",
                     "mqtt_topic": msg.topic,

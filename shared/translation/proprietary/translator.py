@@ -201,6 +201,7 @@ class ProprietaryTranslator(BaseTranslator):
                             success=True,
                             device_id=device_id,
                             device_type=source.get('device_type'),  # Read device_type from source config
+                            action=source.get('action'),  # Read action from source config
                             translator_used=f"proprietary_{self.manufacturer}",
                             translator_type="proprietary",
                             translator=self,  # Pass self reference for manufacturer access

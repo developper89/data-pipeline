@@ -21,6 +21,7 @@ from shared.models.common import (
     StandardizedOutput,
     ValidatedOutput,
     ErrorMessage,
+    CommandMessage,
     generate_request_id,
 )
 from preservarium_sdk.infrastructure.sql_repository.sql_datatype_repository import (
@@ -274,13 +275,19 @@ class NormalizerService:
 
             # 4. Execute Parser Script with Translator
             try:
-                if hasattr(script_module, "parse"):
-                    logger.info(f"Starting parser module {script_module} ...")
+                # Get the action from RawMessage attribute, default to "parse" if not specified
+                action = raw_message.action or "parse"
+                
+                if hasattr(script_module, action):
+                    logger.info(f"Starting parser module {script_module} with action '{action}'...")
                     
                     # Convert hex string payload back to bytes for parser
                     payload_bytes = bytes.fromhex(raw_message.payload_hex) if raw_message.payload_hex else b''
                     
-                    parser_output_list = script_module.parse(
+                    # Get the method to call dynamically
+                    action_method = getattr(script_module, action)
+                    
+                    action_result = action_method(
                         payload=payload_bytes,  # Pass bytes to parser
                         metadata={
                             **raw_message.metadata,  # Pass the raw message metadata
@@ -289,18 +296,38 @@ class NormalizerService:
                         config=hardware_config,
                         message_parser=getattr(translator_instance, 'message_parser', None)  # Pass the message parser instance if available
                     )
-                    # logger.info(f"parser output: {parser_output_list}")
-                    # logger.info(f"[{request_id}] Parser output for payload: {raw_message.payload}: {parser_output_list} ")
-                    logger.debug(
-                        f"[{request_id}] Script execution completed. Got {len(parser_output_list)} records."
-                    )
+                    
+                    # Handle different response formats
+                    if isinstance(action_result, tuple) and len(action_result) == 2:
+                        # New format: (response_type, data)
+                        response_type, data = action_result
+                        logger.debug(f"[{request_id}] Script execution completed using action '{action}' with response_type '{response_type}'")
+                        
+                        if response_type == "data":
+                            # Continue with normal processing
+                            parser_output_list = data
+                            logger.debug(f"[{request_id}] Processing {len(parser_output_list)} data records")
+                        
+                        elif response_type == "feedback":
+                            # Publish feedback to command topic
+                            logger.info(f"[{request_id}] Publishing feedback response to command topic for device {raw_message.device_id}")
+                            await self._publish_command_feedback(raw_message.device_id, data, request_id)
+                            return True  # Success, no further processing needed
+                        
+                        else:
+                            logger.warning(f"[{request_id}] Unknown response_type '{response_type}' from action '{action}'. Treating as data.")
+                            parser_output_list = data
+                            
+                    else:
+                        logger.warning(f"[{request_id}] Unknown response_type '{response_type}' from action '{action}'. Treating as data.")
+                        return True
                 else:
                     logger.error(
-                        f"[{request_id}] Script module does not have a 'parse' method."
+                        f"[{request_id}] Script module does not have a '{action}' method."
                     )
                     await self._publish_processing_error(
-                        "Script Missing Parse Method",
-                        error="Script module does not have a 'parse' method",
+                        f"Script Missing {action} Method",
+                        error=f"Script module does not have a '{action}' method",
                         original_message=job_dict,
                         request_id=request_id,
                         topic_details=(topic, partition, offset),
@@ -917,3 +944,38 @@ class NormalizerService:
         except Exception as e:
             logger.error(f"[{request_id}] Error fetching hardware configuration for device {device_id}: {e}")
             return {}
+
+    async def _publish_command_feedback(self, device_id: str, feedback_data: Dict[str, Any], request_id: Optional[str] = None):
+        """
+        Publish command feedback to the device commands topic.
+        
+        Args:
+            device_id: The device ID to send feedback to
+            feedback_data: The feedback data to send
+            request_id: Optional request ID for logging
+        """
+        try:
+            if not self.kafka_producer:
+                logger.error(f"[{request_id}] Cannot publish command feedback - Kafka producer not available")
+                return
+                
+            # Create CommandMessage from feedback data
+            command_message = CommandMessage(
+                device_id=device_id,
+                command_type="feedback",
+                payload=feedback_data.get("payload"),
+                protocol=feedback_data.get("protocol"),  # Default to MQTT, could be made configurable
+                metadata={
+                    "source": "normalizer",
+                    "request_id": request_id,
+                    "timestamp": datetime.now().isoformat()
+                }
+            )
+            
+            # Publish to command topic using the kafka producer
+            self.kafka_producer.publish_command(command_message)
+            logger.info(f"[{request_id}] Published command feedback for device {device_id}")
+            
+        except Exception as e:
+            logger.error(f"[{request_id}] Error publishing command feedback for device {device_id}: {e}")
+            # Don't raise the exception as this is a secondary operation

@@ -119,7 +119,6 @@ class CommandConsumer:
             metadata = command_message.metadata
             manufacturer = metadata.get('manufacturer')
             command_type = command_message.command_type
-            logger.debug(f"Formatting command for device {device_id} {command_message.model_dump()}")
             # Get translator instance based on command type and manufacturer
             translator = await self._get_translator_for_manufacturer(command_type, manufacturer)
             if not translator:
@@ -206,8 +205,15 @@ class CommandConsumer:
             # Handle feedback acknowledgment
             if command_data.command_type == "feedback":
                 logger.info(f"[{command_data.request_id}] Received feedback acknowledgment for device {command_data.device_id}")
-                # TODO: Implement feedback acknowledgment logic here
-                # This could involve updating command status, notifying waiting processes, etc.
+                pending_commands = self.pending_commands.get(command_data.device_id, None)
+                
+                # # Acknowledge the command
+                if pending_commands:
+                    success = self.acknowledge_command(command_data.device_id, command_data.request_id)
+                    if success:
+                        logger.info(f"[{command_data.request_id}] Command {command_data.request_id} acknowledged")
+                    else:
+                        logger.warning(f"[{command_data.request_id}] Failed to acknowledge command {command_data.request_id}")
                 return True  # Successfully processed feedback
                 
             # Extract required fields
@@ -312,7 +318,6 @@ class CommandConsumer:
         try:
             # Get translator configs for mqtt-connector
             translator_configs = get_translator_configs("mqtt-connector")
-
             # Find appropriate translator based on manufacturer and command type
             selected_translator_config = None
             
@@ -362,6 +367,7 @@ class CommandConsumer:
                 
                 self._translator_cache[cache_key] = translator
                 logger.debug(f"Created translator for manufacturer '{manufacturer}', command_type '{command_type}'")
+                return translator
             else:
                 logger.error(f"No suitable translator configuration found for manufacturer '{manufacturer}', command_type '{command_type}'")
                 return None

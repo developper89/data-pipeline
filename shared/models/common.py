@@ -54,6 +54,7 @@ class CommandMessage(CustomBaseModel):
     command_type: str = Field(..., description="Type of command (e.g., 'set_led', 'reboot', 'update_settings')")
     payload: Dict[str, Any] = Field(..., description="Command payload data")
     protocol: str = Field(..., description="Protocol to use (mqtt or coap)")
+    request_id: Optional[str] = Field(default_factory=generate_request_id, description="Optional request identifier")
     metadata: Optional[Dict[str, Any]] = Field(
         None,
         description="Protocol-specific metadata (e.g., MQTT topic/qos/retain, CoAP confirmable/options) and formatting info (parser_script_path, manufacturer)"

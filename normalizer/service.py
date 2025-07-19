@@ -181,17 +181,19 @@ class NormalizerService:
                 if raw_message.device_type == "sensor":
                     device = await self.sensor_repository.find_one_by(parameter=raw_message.device_id)
                     if not device:
-                        logger.debug(f"[{request_id}] No sensor found with parameter {raw_message.device_id}")
+                        logger.warning(f"[{request_id}] No sensor found with parameter {raw_message.device_id}")
                         return True
                     if not device.recording or not device.active:
                         logger.warning(f"[{request_id}] Sensor {raw_message.device_id} is not recording")
                         return True
+                    hardware_config = await self._get_hardware_configuration(raw_message.device_id, request_id)
                 
                 if raw_message.device_type == "broker":
                     device = await self.broker_repository.find_one_by(parameter=raw_message.device_id)
                     if not device:
-                        logger.debug(f"[{request_id}] No broker found with parameter {raw_message.device_id}")
+                        logger.warning(f"[{request_id}] No broker found with parameter {raw_message.device_id}")
                         return True
+                    hardware_config = {}
                 
                 
                 
@@ -237,7 +239,7 @@ class NormalizerService:
                 translator_instance = await self._initialize_translator(raw_message, request_id)
                 
                 if not translator_instance:
-                    logger.debug(f"[{request_id}] No translator available for device {raw_message.device_id}")
+                    logger.warning(f"[{request_id}] No translator available for device {raw_message.device_id}")
                     return True  # Indicate error was handled
                 
                 # Load script module from translator if available
@@ -271,7 +273,7 @@ class NormalizerService:
                 return True  # Assume non-retryable for now
 
             # 3. Fetch Hardware Configuration
-            hardware_config = await self._get_hardware_configuration(raw_message.device_id, request_id)
+            
 
             # 4. Execute Parser Script with Translator
             try:
@@ -279,7 +281,6 @@ class NormalizerService:
                 action = raw_message.action or "parse"
                 
                 if hasattr(script_module, action):
-                    logger.info(f"Starting parser module {script_module} with action '{action}'...")
                     
                     # Convert hex string payload back to bytes for parser
                     payload_bytes = bytes.fromhex(raw_message.payload_hex) if raw_message.payload_hex else b''
@@ -315,11 +316,11 @@ class NormalizerService:
                             return True  # Success, no further processing needed
                         
                         else:
-                            logger.warning(f"[{request_id}] Unknown response_type '{response_type}' from action '{action}'. Treating as data.")
-                            parser_output_list = data
+                            logger.warning(f"[{request_id}] Unknown response_type '{response_type}' from action '{action}'. Discarding message.")
+                            return True
                             
                     else:
-                        logger.warning(f"[{request_id}] Unknown response_type '{response_type}' from action '{action}'. Treating as data.")
+                        logger.warning(f"[{request_id}] Unknown response_type '{response_type}' from action '{action}'. Discarding message.")
                         return True
                 else:
                     logger.error(
@@ -935,7 +936,7 @@ class NormalizerService:
             # Get the hardware directly by sensor parameter (device_id)
             hardware = await self.hardware_repository.get_hardware_by_sensor_parameter(device_id)
             if not hardware:
-                logger.warning(f"[{request_id}] No hardware found for sensor parameter {device_id}")
+                logger.debug(f"[{request_id}] No hardware found for sensor parameter {device_id}")
                 return {}
                 
             logger.debug(f"[{request_id}] Found hardware configuration for device {device_id}: {hardware.name}")
@@ -963,8 +964,9 @@ class NormalizerService:
             command_message = CommandMessage(
                 device_id=device_id,
                 command_type="feedback",
+                request_id=feedback_data.get("command_id"),
                 payload=feedback_data.get("payload"),
-                protocol=feedback_data.get("protocol"),  # Default to MQTT, could be made configurable
+                protocol=feedback_data.get("metadata").get("protocol"),  # Default to MQTT, could be made configurable
                 metadata={
                     "source": "normalizer",
                     "request_id": request_id,

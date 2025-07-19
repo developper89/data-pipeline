@@ -62,18 +62,31 @@ connect_args: Dict[str, Any] = {
 
 ```python
 # BEFORE:
+database_url = os.getenv("DATABASE_URL")
 async_engine = create_async_engine(str(database_url), echo=False)
 
-# AFTER:
+# AFTER: Lightweight configuration for pipeline services
+class PipelineDBConfig:
+    def __init__(self):
+        self.database_url = os.getenv("DATABASE_URL")
+        # Optimized timeout settings with environment variable support
+        self.command_timeout = int(os.getenv("DB_COMMAND_TIMEOUT", "30"))
+        self.statement_timeout = os.getenv("DB_STATEMENT_TIMEOUT", "30s")
+        self.idle_in_transaction_session_timeout = os.getenv("DB_IDLE_IN_TRANSACTION_TIMEOUT", "60s")
+        self.lock_timeout = os.getenv("DB_LOCK_TIMEOUT", "30s")
+
+db_config = PipelineDBConfig()
 async_engine = create_async_engine(
-    str(database_url),
-    echo=False,
+    db_config.database_url,
+    echo=db_config.echo,                                     # ✅ Environment-driven config
+    pool_size=db_config.pool_size,                           # ✅ Environment-driven config
     connect_args={
-        "command_timeout": 30,                               # ➕ NEW timeout protection
+        "command_timeout": db_config.command_timeout,        # ✅ 30s timeout protection
         "server_settings": {
-            "statement_timeout": "30s",                      # ➕ NEW timeout protection
-            "idle_in_transaction_session_timeout": "60s",   # ➕ NEW - Prevents stuck transactions
-            "lock_timeout": "30s",                          # ➕ NEW timeout protection
+            "jit": "off",                                    # ✅ Performance optimization
+            "statement_timeout": db_config.statement_timeout, # ✅ 30s query timeout
+            "idle_in_transaction_session_timeout": db_config.idle_in_transaction_session_timeout,  # ✅ 60s stuck connection killer
+            "lock_timeout": db_config.lock_timeout,          # ✅ 30s lock timeout
         },
     }
 )
@@ -92,10 +105,81 @@ async_engine = create_async_engine(
 
 ### **System-Wide Coverage**
 
-- ✅ **Backend API Services** - Protected
-- ✅ **Data Pipeline Services** - Protected
-- ✅ **Normalizer Service** - Protected
-- ✅ **All Repository Operations** - Protected
+- ✅ **Backend API Services** - Protected with centralized config
+- ✅ **Data Pipeline Services** - Protected with SDK SettingsManager
+- ✅ **Normalizer Service** - Protected with centralized config
+- ✅ **All Repository Operations** - Protected with unified timeout settings
+
+### **🔧 Architectural Improvements**
+
+- ✅ **Centralized Configuration** - Data pipeline now uses SDK SettingsManager
+- ✅ **Configuration Consistency** - Same settings across backend and pipeline
+- ✅ **Maintainability** - Single source of truth for database settings
+- ✅ **Environment Management** - Proper settings loading from environment
+
+### **🚨 Pipeline Configuration Fix**
+
+**Issue**: Pipeline services failed to start due to SDK SettingsManager requiring all backend settings (auth, file_upload, smtp, etc.) that pipeline services don't need.
+
+**Solution**: Replaced SDK dependency with lightweight `PipelineDBConfig` class that:
+
+- ✅ **Only requires DATABASE_URL** - No unnecessary dependencies
+- ✅ **Environment variable driven** - Easy configuration via env vars
+- ✅ **Same timeout protections** - Maintains all safety features
+- ✅ **Sensible defaults** - Works out of the box with just DATABASE_URL
+
+### **4. Enhanced FastAPI Session Management**
+
+**File**: `backend/app/infrastructure/database/database.py`
+
+```python
+# BEFORE:
+async def get_session():
+    session = async_session_factory()
+    try:
+        yield session
+        await session.commit()
+    except Exception as e:
+        await session.rollback()
+        logger.error(f"Database session error: {str(e)}")
+        raise
+    finally:
+        await session.close()
+
+# AFTER:
+async def get_session():
+    session = async_session_factory()
+    session_id = id(session)                                      # ➕ Session tracking
+    logger.debug(f"Created database session {session_id}")       # ➕ Debug logging
+
+    try:
+        yield session
+        await session.commit()
+        logger.debug(f"Successfully committed session {session_id}")  # ➕ Success logging
+    except asyncio.CancelledError:                                # ➕ Client disconnection handling
+        await session.rollback()
+        logger.warning(f"Request cancelled - rolled back session {session_id}")
+        raise
+    except Exception as e:
+        await session.rollback()
+        logger.error(f"Database session {session_id} error: {str(e)}")  # ➕ Session ID in error
+        raise
+    finally:
+        try:                                                      # ➕ Safe cleanup
+            await session.close()
+            logger.debug(f"Closed database session {session_id}")
+        except Exception as e:
+            logger.error(f"Error closing session {session_id}: {e}")
+```
+
+**Benefits**:
+
+- ✅ **Client Disconnection Handling** - Graceful handling of `asyncio.CancelledError`
+- ✅ **Session Tracking** - Debug logging with unique session IDs
+- ✅ **Safe Cleanup** - Protected session closing in finally block
+- ✅ **Better Diagnostics** - Session ID in all error messages
+
+**Note**: Repository methods also perform rollbacks for data pipeline compatibility. This creates redundant (but safe) double rollbacks in FastAPI pattern - first at repository level, then at session dependency level. This design ensures consistency across both usage patterns.
 
 ---
 
@@ -152,6 +236,7 @@ ORDER BY state_change;
 - [x] **SDK Configuration** - Timeout values defined
 - [x] **Backend Services** - Timeout enforcement added
 - [x] **Data Pipeline** - Timeout protection enabled
+- [x] **FastAPI Session Management** - Enhanced error handling implemented
 - [ ] **Service Restart** - Required for activation
 - [ ] **Verification** - Test timeout behavior
 

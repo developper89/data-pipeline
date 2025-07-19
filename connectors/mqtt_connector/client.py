@@ -203,8 +203,8 @@ class MQTTClientWrapper:
             # Convert dict payload to JSON string
             payload = json.dumps(payload)
             
-            logger.debug(f"Publishing to MQTT topic '{topic}' (QoS: {qos}, Retain: {retain}), payload: {payload}")
-            return True
+            logger.info(f"Publishing to MQTT topic '{topic}' (QoS: {qos}, Retain: {retain}), payload: {payload}")
+            # return True
             result = self.client.publish(topic, payload, qos=qos, retain=retain)
             
             # Check if the message was queued successfully
@@ -334,6 +334,8 @@ class MQTTClientWrapper:
             
             payload_bytes = msg.payload
             
+            if result.device_type == "broker" and len(msg.payload) > 1:
+                logger.info(f"Received message on topic '{msg.topic}' (QoS {msg.qos}), payload type: {type(msg.payload)}, payload: {msg.payload}")
             # Convert binary payload to hex string to match RawMessage model expectation
             payload_str = payload_bytes.hex() if isinstance(payload_bytes, bytes) else str(payload_bytes)
             

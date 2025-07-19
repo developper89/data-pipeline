@@ -6,13 +6,14 @@ import os
 import sys
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator
-from shared.db.database import init_db
+from shared.db.database import session_manager
 from preservarium_sdk.infrastructure.sql_repository.sql_datatype_repository import SQLDatatypeRepository
 from preservarium_sdk.infrastructure.sql_repository.sql_sensor_repository import SQLSensorRepository
 from preservarium_sdk.infrastructure.sql_repository.sql_hardware_repository import SQLHardwareRepository
 from preservarium_sdk.infrastructure.sql_repository.sql_alarm_repository import SQLAlarmRepository
 from preservarium_sdk.infrastructure.sql_repository.sql_alert_repository import SQLAlertRepository
 from preservarium_sdk.infrastructure.sql_repository.sql_user_repository import SQLUserRepository
+from preservarium_sdk.infrastructure.sql_repository.sql_broker_repository import SQLBrokerRepository
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Ensure other local modules are importable if running as main
@@ -75,18 +76,29 @@ async def setup_signal_handlers(service: NormalizerService) -> None:
 @asynccontextmanager
 async def manage_database() -> AsyncGenerator[AsyncSession, None]:
     """
-    Async context manager for database session.
-    Handles initial connection and cleanup.
+    Enhanced async context manager for database session with error recovery.
+    Uses the DatabaseSessionManager for automatic error handling and recovery.
     """
-    db_session = None
     try:
-        logger.info("Initializing database connection...")
-        db_session = await init_db()
+        logger.info("Initializing enhanced database connection with error recovery...")
+        # Use the enhanced session manager instead of raw init_db
+        db_session = await session_manager.get_session()
         yield db_session
+    except Exception as e:
+        logger.error(f"Database session error, attempting recovery: {e}")
+        # Try to recover the session
+        recovery_successful = await session_manager.recover_session()
+        if recovery_successful:
+            logger.info("Database session recovered successfully")
+            # Yield the recovered session
+            db_session = await session_manager.get_session()
+            yield db_session
+        else:
+            logger.error("Database session recovery failed")
+            raise e
     finally:
-        if db_session:
-            logger.info("Closing database connection...")
-            await db_session.close()
+        logger.info("Closing enhanced database connection...")
+        await session_manager.close()
 
 @asynccontextmanager
 async def manage_service(db_session: AsyncSession) -> AsyncGenerator[NormalizerService, None]:
@@ -104,6 +116,7 @@ async def manage_service(db_session: AsyncSession) -> AsyncGenerator[NormalizerS
         alarm_repository = SQLAlarmRepository(db_session)
         alert_repository = SQLAlertRepository(db_session)
         user_repository = SQLUserRepository(db_session)
+        broker_repository = SQLBrokerRepository(db_session)
         # Create service with all repositories for enhanced validation and alarm handling
         service = NormalizerService(
             datatype_repository=datatype_repository,
@@ -111,7 +124,8 @@ async def manage_service(db_session: AsyncSession) -> AsyncGenerator[NormalizerS
             hardware_repository=hardware_repository,
             alarm_repository=alarm_repository,
             alert_repository=alert_repository,
-            user_repository=user_repository
+            user_repository=user_repository,
+            broker_repository=broker_repository
         )
         
         yield service

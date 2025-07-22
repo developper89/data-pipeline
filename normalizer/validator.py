@@ -378,7 +378,8 @@ class Validator:
     def _convert_data_types(self, suggested_types: List[str], num_values: int) -> List[DatatypeType]:
         """Convert string data types to DatatypeType enums."""
         type_mapping = {
-            'number': DatatypeType.NUMBER,
+            'integer': DatatypeType.INTEGER,
+            'float': DatatypeType.FLOAT,
             'boolean': DatatypeType.BOOLEAN,
             'string': DatatypeType.STRING,
             'datetime': DatatypeType.DATETIME,
@@ -390,17 +391,17 @@ class Validator:
         try:
             type_enums = []
             for dt_str in suggested_types:
-                type_enums.append(type_mapping.get(dt_str, DatatypeType.NUMBER))
+                type_enums.append(type_mapping.get(dt_str, DatatypeType.FLOAT))
             
             if type_enums:
                 primary_type = type_enums[0]
                 return [primary_type] * num_values
             else:
-                return [DatatypeType.NUMBER] * num_values
+                return [DatatypeType.FLOAT] * num_values
                 
         except Exception as e:
             logger.warning(f"Error converting data types for auto-discovery: {e}")
-            return [DatatypeType.NUMBER] * num_values
+            return [DatatypeType.FLOAT] * num_values
     
     def _align_datatype_with_standardized_data(
         self, 
@@ -517,7 +518,7 @@ class Validator:
     def _reorder_array(self, array: List[Any], indices: List[int], attr_name: str) -> List[Any]:
         """Reorder array based on matched indices."""
         default_values = {
-            'data_type': DatatypeType.NUMBER,
+            'data_type': DatatypeType.FLOAT,
             'unit': "",
             'display_names': "",
             'persist': False,
@@ -548,7 +549,8 @@ class Validator:
     def _convert_string_to_datatype_enum(self, value: str) -> DatatypeType:
         """Convert string data type to DatatypeType enum."""
         mapping = {
-            'number': DatatypeType.NUMBER,
+            'integer': DatatypeType.INTEGER,
+            'float': DatatypeType.FLOAT,
             'boolean': DatatypeType.BOOLEAN,
             'string': DatatypeType.STRING,
             'datetime': DatatypeType.DATETIME,
@@ -556,7 +558,7 @@ class Validator:
             'object': DatatypeType.OBJECT,
             'bytes': DatatypeType.BYTES,
         }
-        return mapping.get(value, DatatypeType.NUMBER)
+        return mapping.get(value, DatatypeType.FLOAT)
     
     def _validate_whitelist(
         self, 
@@ -637,7 +639,7 @@ class Validator:
                 continue
             
             # Get expected type for this index
-            expected_type = self._get_array_value_at_index(expected_types, i, DatatypeType.NUMBER)
+            expected_type = self._get_array_value_at_index(expected_types, i, DatatypeType.FLOAT)
             
             # Convert value
             converted_value, conversion_success, error_msg = self._convert_value_to_type(
@@ -665,7 +667,9 @@ class Validator:
     ) -> Tuple[Any, bool, str]:
         """Convert a single value to the expected type."""
         try:
-            if expected_type == DatatypeType.NUMBER:
+            if expected_type == DatatypeType.INTEGER:
+                return int(float(value)), True, ""  # Convert to float first to handle string decimals, then to int
+            elif expected_type == DatatypeType.FLOAT:
                 return float(value), True, ""
             elif expected_type == DatatypeType.BOOLEAN:
                 if isinstance(value, bool):

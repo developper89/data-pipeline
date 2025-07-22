@@ -962,7 +962,7 @@ class NormalizerService:
                 
             # Create CommandMessage from feedback data
             command_message = CommandMessage(
-                device_id=device_id,
+                device_id=feedback_data.get("device_id"),
                 command_type="feedback",
                 request_id=feedback_data.get("command_id"),
                 payload=feedback_data.get("payload"),

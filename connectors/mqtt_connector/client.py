@@ -203,7 +203,7 @@ class MQTTClientWrapper:
             # Convert dict payload to JSON string
             payload = json.dumps(payload)
             
-            logger.info(f"Publishing to MQTT topic '{topic}' (QoS: {qos}, Retain: {retain}), payload: {payload}")
+            logger.debug(f"Publishing to MQTT topic '{topic}' (QoS: {qos}, Retain: {retain}), payload: {payload}")
             # return True
             result = self.client.publish(topic, payload, qos=qos, retain=retain)
             

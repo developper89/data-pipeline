@@ -1,6 +1,7 @@
 connectors:
   - connector_id: "coap-connector"
     image: "coap-connector:latest"
+    protocol: "coap"
     translators:
       - type: "protobuf"
         config:
@@ -27,7 +28,7 @@ connectors:
             validation:
               regex: "^[a-fA-F0-9]{8,64}$"
               normalize: true
-          command_formatting:
+          commands:
             sources:
               - command_type: "alarm"
                 message_type: "config"
@@ -37,22 +38,16 @@ connectors:
                 priority: 1
               - command_type: "refresh_config"
                 message_type: "config"
-                priority: 1
-              - command_type: "firmware_update"
-                message_type: "config"
-                priority: 1
-              - command_type: "device_info_request"
-                message_type: "device_info"
+                templating:
+                  type: "button"
+                  display_name: ""
+                  class: "p-button-secondary"
+                  tooltip: "Demander la configuration actuelle"
+                  icon: "pi pi-history"
                 priority: 1
             validation:
               supported_commands:
-                [
-                  "alarm",
-                  "config",
-                  "refresh_config",
-                  "firmware_update",
-                  "device_info_request",
-                ]
+                ["alarm", "config", "refresh_config", "device_info_request"]
           message_types:
             measurements:
               proto_class: "ProtoMeasurements"
@@ -80,6 +75,7 @@ connectors:
 
   - connector_id: "mqtt-connector"
     image: "mqtt-connector:latest"
+    protocol: "mqtt"
     translators:
       - type: "proprietary"
         config:
@@ -124,18 +120,36 @@ connectors:
               #   validation:
               #     min_length: 3
               #     max_length: 50
-          command_formatting:
+          commands:
             sources:
               - command_type: "config"
                 format_type: "json"
-                topic_pattern: "broker_data/{device_id}/config"
+                topic_pattern: "broker_data/{device_id}/command"
+                templating:
+                  type: "internal"
                 priority: 1
               - command_type: "reboot"
                 format_type: "json"
-                topic_pattern: "broker_data/{device_id}/control"
+                topic_pattern: "broker_data/{device_id}/command"
+                templating:
+                  type: "button"
+                  display_name: ""
+                  tooltip: "Redémarrer"
+                  class: "p-button-secondary"
+                  icon: "pi pi-power-off"
+                priority: 1
+              - command_type: "synchronize"
+                format_type: "json"
+                topic_pattern: "broker_data/{device_id}/command"
+                templating:
+                  type: "button"
+                  display_name: ""
+                  class: "p-button-secondary"
+                  tooltip: "Synchroniser le temps"
+                  icon: "pi pi-history"
                 priority: 1
             validation:
-              supported_commands: ["config", "reboot"]
+              supported_commands: ["config", "reboot", "synchronize"]
     env:
       BROKER_HOST: "preservarium.fr"
       BROKER_PORT: "8883"

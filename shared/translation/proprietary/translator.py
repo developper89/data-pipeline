@@ -42,7 +42,14 @@ class ProprietaryTranslator(BaseTranslator):
         # Sort sources by priority (lower number = higher priority)
         self.sources.sort(key=lambda x: x.get('priority', 999))
         
-        logger.info(f"Initialized ProprietaryTranslator with {len(self.sources)} extraction sources")
+        # Generate unique translator ID based on configuration hash
+        import hashlib
+        import json
+        config_str = json.dumps(config, sort_keys=True)
+        config_hash = hashlib.md5(config_str.encode()).hexdigest()[:8]
+        self.translator_id = f"{self.manufacturer}_{config_hash}"
+        
+        logger.info(f"Initialized ProprietaryTranslator '{self.translator_id}' with {len(self.sources)} extraction sources")
         for i, source in enumerate(self.sources):
             logger.debug(f"Source {i+1}: type={source.get('type')}, priority={source.get('priority', 999)}")
             
@@ -196,20 +203,26 @@ class ProprietaryTranslator(BaseTranslator):
                 if device_id:
                     # Apply validation if configured
                     if self._validate_device_id(device_id, source):
+                        # Generate unique translator_used identifier with translator ID and source index
+                        source_id = f"s{i}"  # Source index (s0, s1, s2, etc.)
+                        translator_used = f"proprietary_{self.translator_id}_{source_id}"
+                        
                         logger.debug(f"Successfully extracted device ID '{device_id}' using source {i+1} ({source_type})")
                         return TranslationResult(
                             success=True,
                             device_id=device_id,
                             device_type=source.get('device_type'),  # Read device_type from source config
                             action=source.get('action'),  # Read action from source config
-                            translator_used=f"proprietary_{self.manufacturer}",
+                            translator_used=translator_used,
                             translator_type="proprietary",
                             translator=self,  # Pass self reference for manufacturer access
                             raw_data=raw_data,
                             metadata={
                                 'sources_count': len(self.sources),
                                 'extraction_successful': device_id is not None,
-                                'source_used': f"{source_type}_{i+1}"
+                                'source_used': f"{source_type}_{i+1}",
+                                'translator_id': self.translator_id,
+                                'source_index': i
                             }
                         ) 
                     else:
@@ -220,7 +233,7 @@ class ProprietaryTranslator(BaseTranslator):
                 logger.warning(f"Error in source {i+1} ({source_type}): {e}")
                 continue
         
-        logger.warning("No device ID could be extracted from any configured source")
+        logger.warning(f"[{raw_data.path}] No device ID could be extracted from any configured source using translator {self.translator_id}")
         return TranslationResult(
             success=False,
             error="No device ID could be extracted from any configured source",

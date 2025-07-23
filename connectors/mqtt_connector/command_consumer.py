@@ -50,7 +50,7 @@ class CommandConsumer(BaseCommandConsumer):
         try:
             request_id = command_message.request_id
             device_id = command_message.device_id
-            
+            logger.info(f"formatted_data; {formatted_data}")
             metadata = formatted_data.get('metadata', {})
             # Extract topic from metadata (required for MQTT)
             topic = metadata.get('topic', None)

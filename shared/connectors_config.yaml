@@ -150,6 +150,75 @@ connectors:
                 priority: 1
             validation:
               supported_commands: ["config", "reboot", "synchronize"]
+      - type: "proprietary"
+        config:
+          manufacturer: "mafabrique"
+          parser_script_path: "light_controller_parser.py"
+          device_id_extraction:
+            sources:
+              # Light controllers use scheduler_data topic pattern
+              - type: "path_pattern"
+                pattern: "broker_data/+/{device_id}/scheduler_data"
+                device_type: "light_controller"
+                action: "parse"
+                priority: 1
+                validation:
+                  min_length: 3
+                  max_length: 50
+                  pattern: "^[a-fA-F0-9]+$"
+          commands:
+            sources:
+              # Light-specific commands
+              - command_type: "light_control"
+                templating:
+                  type: "component"
+                  component: "LightControlCard.mafabrique" # Will resolve to LightControlCard.mafabrique
+                  placement: "overview"
+              - command_type: "light_read_all"
+                format_type: "binary"
+                topic_pattern: "broker_data/{device_id}/command"
+                templating:
+                  type: "button"
+                  display_name: "Rafraîchir"
+                  class: "p-button-primary"
+                  tooltip: "Lire toutes les tâches programmées"
+                  icon: "pi pi-refresh"
+                priority: 1
+
+              - command_type: "light_config"
+                topic_pattern: "broker_data/{device_id}/command"
+                templating:
+                  type: "button"
+                  display_name: ""
+                  class: "p-button-secondary"
+                  tooltip: "Configurer"
+                  icon: "pi pi-cog"
+                priority: 1
+
+              - command_type: "light_delete_task"
+                format_type: "binary"
+                topic_pattern: "broker_data/{device_id}/command"
+                templating:
+                  type: "internal"
+                priority: 1
+
+              - command_type: "light_delete_all"
+                format_type: "binary"
+                topic_pattern: "broker_data/{device_id}/command"
+                templating:
+                  type: "button"
+                  display_name: "Supprimer Tout"
+                  class: "p-button-danger"
+                  tooltip: "Supprimer toutes les tâches"
+                  icon: "pi pi-trash"
+                priority: 1
+          validation:
+            supported_commands:
+              - "light_read_all"
+              - "light_config"
+              - "light_delete_task"
+              - "light_delete_all"
+        priority: 2
     env:
       BROKER_HOST: "preservarium.fr"
       BROKER_PORT: "8883"
@@ -157,7 +226,7 @@ connectors:
       KAFKA_RAW_DATA_TOPIC: "iot_raw_data"
       KAFKA_ERROR_TOPIC: "iot_errors"
       KAFKA_DEVICE_COMMANDS_TOPIC: "device_commands"
-      MQTT_TOPICS: "broker_data/+/+/data,broker_data/+/feedback"
+      MQTT_TOPICS: "broker_data/+/+/data,broker_data/+/feedback,broker_data/+/+/scheduler_data"
       USE_TLS: "true"
       MQTT_USERNAME: "root"
       MQTT_PASSWORD: "root"

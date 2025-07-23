@@ -177,6 +177,9 @@ class NormalizerService:
                     job_dict["request_id"] = generate_request_id()
                 raw_message = RawMessage(**job_dict)
 
+                # Initialize hardware_config as default empty dict
+                hardware_config = {}
+
                 # Find the sensor using parameter field
                 if raw_message.device_type == "sensor":
                     device = await self.sensor_repository.find_one_by(parameter=raw_message.device_id)
@@ -188,11 +191,16 @@ class NormalizerService:
                         return True
                     hardware_config = await self._get_hardware_configuration(raw_message.device_id, request_id)
                 
-                if raw_message.device_type == "broker":
+                elif raw_message.device_type == "broker":
                     device = await self.broker_repository.find_one_by(parameter=raw_message.device_id)
                     if not device:
                         logger.warning(f"[{request_id}] No broker found with parameter {raw_message.device_id}")
                         return True
+                    hardware_config = {}
+                
+                else:
+                    # For other device types (light_controller, etc.), use empty config
+                    logger.debug(f"[{request_id}] Device type '{raw_message.device_type}' using default empty config")
                     hardware_config = {}
                 
                 
@@ -692,16 +700,24 @@ class NormalizerService:
                 return None
             
             # Find the matching translator configuration
+            # All translators now use unique IDs based on configuration hash
             matching_config = None
             for config_item in translator_configs:
                 translator_type = config_item.get('type')
                 config_details = config_item.get('config', {})
                 manufacturer = config_details.get('manufacturer', '')
                 
-                # Construct expected translator_used name (e.g., "protobuf_efento")
-                expected_name = f"{translator_type}_{manufacturer}" if manufacturer else translator_type
+                # Generate the expected translator ID for all translator types
+                import hashlib
+                import json
+                config_str = json.dumps(config_details, sort_keys=True)
+                config_hash = hashlib.md5(config_str.encode()).hexdigest()[:8]
+                expected_translator_id = f"{manufacturer}_{config_hash}"
                 
-                if expected_name == translator_used:
+                # Unified pattern: {translator_type}_{translator_id}_
+                expected_prefix = f"{translator_type}_{expected_translator_id}_"
+                
+                if translator_used.startswith(expected_prefix):
                     matching_config = config_item
                     break
             

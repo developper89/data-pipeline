@@ -344,7 +344,7 @@ class MQTTClientWrapper:
                 device_id=result.device_id,
                 payload_hex=payload_str,  # Updated field name from payload to payload_hex
                 protocol="mqtt",
-                device_type=result.device_type,  # Pass device_type from translation result
+                device_type=result.device_type if result.device_type is not None else "sensor",  # Default to 'sensor' if not set
                 action=result.action,  # Pass action from translation result as critical field
                 metadata={
                     "protocol": "mqtt",

@@ -16,6 +16,13 @@ class ProtobufTranslator(BaseTranslator):
         self.config = config
         self.manufacturer = config.get('manufacturer', 'unknown')
 
+        # Generate unique translator ID based on configuration hash
+        import hashlib
+        import json
+        config_str = json.dumps(config, sort_keys=True)
+        config_hash = hashlib.md5(config_str.encode()).hexdigest()[:8]
+        self.translator_id = f"{self.manufacturer}_{config_hash}"
+
         # Initialize components with manufacturer-specific config
         self.message_parser = ProtobufMessageParser(
             manufacturer=self.manufacturer,
@@ -167,12 +174,17 @@ class ProtobufTranslator(BaseTranslator):
                             # Get device_type and action from the extraction source if available
                             device_type = self.device_id_extractor.get_device_type_for_source(self.device_id_extractor.last_source_used)
                             action = self.device_id_extractor.get_action_for_source(self.device_id_extractor.last_source_used)
+                            
+                            # Generate unique translator_used with source type identification
+                            source_type = "path_mapping"
+                            translator_used = f"protobuf_{self.translator_id}_{source_type}"
+                            
                             return TranslationResult(
                                 success=True,
                                 device_id=device_id,
                                 device_type=device_type,
                                 action=action,
-                                translator_used=f"protobuf_{self.manufacturer}",
+                                translator_used=translator_used,
                                 translator_type="protobuf",
                                 translator=self,
                                 metadata={
@@ -180,6 +192,8 @@ class ProtobufTranslator(BaseTranslator):
                                     "message_type": message_type,
                                     "extraction_source": self.device_id_extractor.last_source_used,
                                     "path_mapping_used": True,
+                                    "translator_id": self.translator_id,
+                                    "source_type": source_type,
                                     "path_component": path_component,
                                     "original_path": raw_data.path
                                 }
@@ -206,19 +220,26 @@ class ProtobufTranslator(BaseTranslator):
                 # Get device_type and action from the extraction source if available
                 device_type = self.device_id_extractor.get_device_type_for_source(self.device_id_extractor.last_source_used)
                 action = self.device_id_extractor.get_action_for_source(self.device_id_extractor.last_source_used)
+                
+                # Generate unique translator_used with source type identification
+                source_type = "priority_detection"
+                translator_used = f"protobuf_{self.translator_id}_{source_type}"
+                
                 return TranslationResult(
                     success=True,
                     device_id=device_id,
                     device_type=device_type,
                     action=action,
-                    translator_used=f"protobuf_{self.manufacturer}",
+                    translator_used=translator_used,
                     translator_type="protobuf",
                     translator=self,
                     metadata={
                         "manufacturer": self.manufacturer,
                         "message_type": message_type,
                         "extraction_source": self.device_id_extractor.last_source_used,
-                        "path_mapping_used": False
+                        "path_mapping_used": False,
+                        "translator_id": self.translator_id,
+                        "source_type": source_type
                     }
                 )
             else:

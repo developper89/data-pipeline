@@ -68,7 +68,7 @@ htmlcov/
 
 # Data pipeline specific
 # Add any specific data directories or temp storage
-storage/parser_scripts/*
+storage/parser_scripts/debug
 !storage/parser_scripts/.gitkeep
 storage/temp/*
 !storage/temp/.gitkeep

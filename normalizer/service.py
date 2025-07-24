@@ -179,29 +179,29 @@ class NormalizerService:
 
                 # Initialize hardware_config as default empty dict
                 hardware_config = {}
+                device = None
 
                 # Find the sensor using parameter field
-                if raw_message.device_type == "sensor":
-                    device = await self.sensor_repository.find_one_by(parameter=raw_message.device_id)
-                    if not device:
-                        logger.warning(f"[{request_id}] No sensor found with parameter {raw_message.device_id}")
-                        return True
-                    if not device.recording or not device.active:
-                        logger.warning(f"[{request_id}] Sensor {raw_message.device_id} is not recording")
-                        return True
-                    hardware_config = await self._get_hardware_configuration(raw_message.device_id, request_id)
-                
-                elif raw_message.device_type == "broker":
+                if raw_message.device_type == "broker":
                     device = await self.broker_repository.find_one_by(parameter=raw_message.device_id)
                     if not device:
-                        logger.warning(f"[{request_id}] No broker found with parameter {raw_message.device_id}")
+                        logger.debug(f"[{request_id}] No broker found with parameter {raw_message.device_id}")
                         return True
                     hardware_config = {}
                 
                 else:
+                    device = await self.sensor_repository.find_one_by(parameter=raw_message.device_id)
+                    if not device:
+                        logger.debug(f"[{request_id}] No sensor found with parameter {raw_message.device_id}")
+                        return True
+                    if not device.recording or not device.active:
+                        logger.debug(f"[{request_id}] Sensor {raw_message.device_id} is not recording")
+                        return True
+
+                    hardware_config = await self._get_hardware_configuration(raw_message.device_id, request_id)
                     # For other device types (light_controller, etc.), use empty config
-                    logger.debug(f"[{request_id}] Device type '{raw_message.device_type}' using default empty config")
-                    hardware_config = {}
+                    # logger.debug(f"[{request_id}] Device type '{raw_message.device_type}' using default empty config")
+
                 
                 
                 
@@ -213,7 +213,7 @@ class NormalizerService:
                 # Collect debug data
                 debug_entry = {
                     "device_id": raw_message.device_id,
-                    "payload_hex": raw_message.payload_hex,
+                    "payload": raw_message.payload,
                     "request_id": request_id,
                     "timestamp": datetime.now().isoformat()
                 }
@@ -291,11 +291,12 @@ class NormalizerService:
                 if hasattr(script_module, action):
                     
                     # Convert hex string payload back to bytes for parser
-                    payload_bytes = bytes.fromhex(raw_message.payload_hex) if raw_message.payload_hex else b''
+                    # payload_bytes = bytes.fromhex(raw_message.payload_hex) if raw_message.payload_hex else b''
+                    payload_bytes = raw_message.payload
                     
                     # Get the method to call dynamically
                     action_method = getattr(script_module, action)
-                    
+                    # logger.info(f"payload_bytes: {payload_bytes}, {type(payload_bytes)}")
                     action_result = action_method(
                         payload=payload_bytes,  # Pass bytes to parser
                         metadata={
@@ -448,7 +449,8 @@ class NormalizerService:
                         logger.debug(f"[{request_id}] Alarm handler available and validated data list is not empty")
                         total_alerts_created = []
                         any_critical_status_alarm = False
-                        logger.info(f"[{request_id}] Validated data list: {validated_data_list}")
+                        # if raw_message.device_type == "light_controller":
+                        # logger.info(f"[{request_id}] Validated data list: {validated_data_list}")
                         for validated_data in validated_data_list:
                             # Process alarms for each validated output
                             alarm_result = await self.alarm_handler.process_alarms(
@@ -457,7 +459,7 @@ class NormalizerService:
                                 script_module=script_module,
                                 request_id=request_id
                             )
-                            logger.info(f"alarm result: {alarm_result}")
+                            logger.debug(f"alarm result: {alarm_result}")
                             # Extract results from the returned dictionary
                             alert_ids = alarm_result.get("alert_ids", [])
                             triggered_alarms = alarm_result.get("triggered_alarms", [])

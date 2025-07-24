@@ -288,6 +288,7 @@ class DataRootResource(resource.Resource):
                 device_id=device_id,
                 timestamp=datetime.now(timezone.utc),
                 payload_hex=request.payload.hex(),
+                payload=request.payload,
                 protocol="coap",
                 device_type=translation_result.device_type,  # Pass device_type from translation result
                 action=translation_result.action,  # Pass action from translation result as critical field

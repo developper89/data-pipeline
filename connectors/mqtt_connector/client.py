@@ -331,18 +331,19 @@ class MQTTClientWrapper:
         try:
             # Use translation layer to extract device ID
             result = self._extract_device_id_using_translation(msg.topic, msg.payload)
-            
-            payload_bytes = msg.payload
+            # msg.payload is always of type bytes
+            payload_str = msg.payload.decode('utf-8')
             
             if result.device_type == "broker" and len(msg.payload) > 1:
-                logger.info(f"Received message on topic '{msg.topic}' (QoS {msg.qos}), payload type: {type(msg.payload)}, payload: {msg.payload}")
+                logger.info(f"Received message on topic '{msg.topic}' (QoS {msg.qos}), , payload: {payload_str}")
             # Convert binary payload to hex string to match RawMessage model expectation
-            payload_str = payload_bytes.hex() if isinstance(payload_bytes, bytes) else str(payload_bytes)
+            # payload_str = payload_bytes.hex() if isinstance(payload_bytes, bytes) else str(payload_bytes)
             
             # Create RawMessage - with payload as string
             raw_message = RawMessage(
                 device_id=result.device_id,
-                payload_hex=payload_str,  # Updated field name from payload to payload_hex
+                # payload_hex=payload_str, 
+                payload=payload_str,
                 protocol="mqtt",
                 device_type=result.device_type if result.device_type is not None else "sensor",  # Default to 'sensor' if not set
                 action=result.action,  # Pass action from translation result as critical field
@@ -355,12 +356,15 @@ class MQTTClientWrapper:
                     "manufacturer": result.translator.manufacturer,
                 }
             )
-            
-            # Log specific device for debugging
-            if result.device_id == "2207001":
-                logger.info(f"Received message on topic '{msg.topic}' (QoS {msg.qos})")
+            if "scheduler_data" in msg.topic:
+                logger.info(f"Received message on topic '{msg.topic}' (QoS {msg.qos}) with translator: {result.translator_used}")
                 logger.info(f"Extracted device_id: {result.device_id}")
-                logger.info(f"payload_hex is: {raw_message.payload_hex}")
+                logger.info(f"payload is: {raw_message.payload}")
+            # Log specific device for debugging
+            # if result.device_id == "2207001":
+            #     logger.info(f"Received message on topic '{msg.topic}' (QoS {msg.qos})")
+            #     logger.info(f"Extracted device_id: {result.device_id}")
+            #     logger.info(f"payload is: {raw_message.payload}")
             
             # Publish to Kafka - schedule the async call in the main event loop
             if self.event_loop and not self.event_loop.is_closed():

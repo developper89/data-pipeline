@@ -233,7 +233,7 @@ class ProprietaryTranslator(BaseTranslator):
                 logger.warning(f"Error in source {i+1} ({source_type}): {e}")
                 continue
         
-        logger.warning(f"[{raw_data.path}] No device ID could be extracted from any configured source using translator {self.translator_id}")
+        logger.debug(f"[{raw_data.path}] No device ID could be extracted from any configured source using translator {self.translator_id}")
         return TranslationResult(
             success=False,
             error="No device ID could be extracted from any configured source",

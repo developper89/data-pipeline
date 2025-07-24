@@ -42,7 +42,7 @@ class KafkaMsgProducer:
                 message.model_dump(),
                 message.device_id
             )
-            logger.debug(f"Published raw message for device {message.device_id} (req: {message.request_id}) to Kafka topic '{config.KAFKA_RAW_DATA_TOPIC}' with payload: {message.payload_hex}")
+            logger.debug(f"Published raw message for device {message.device_id} (req: {message.request_id}) to Kafka topic '{config.KAFKA_RAW_DATA_TOPIC}' with payload: {message.payload}")
         except Exception as e:
             # Error already logged in publish_message helper
             logger.error(f"Failed to publish raw message for {message.device_id} to Kafka. Error: {e}")

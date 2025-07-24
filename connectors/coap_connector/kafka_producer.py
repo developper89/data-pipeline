@@ -59,7 +59,7 @@ class KafkaMsgProducer:
             topic = config.KAFKA_RAW_DATA_TOPIC
             value = message.model_dump()  # Convert Pydantic model to dict
 
-            logger.debug(f"Published raw message for device {message.device_id} (req: {message.request_id}) to Kafka topic '{config.KAFKA_RAW_DATA_TOPIC}' with payload: {message.payload_hex}")
+            logger.info(f"Published raw message for device {message.device_id} (req: {message.request_id}) to Kafka topic '{config.KAFKA_RAW_DATA_TOPIC}' with payload: {message.payload}")
             # Use the synchronous helper function
             publish_message(self.producer, topic, value, key)
             # Logging of success/failure happens within publish_message helper

@@ -123,7 +123,7 @@ class AlarmHandler:
                     request_id
                 )
             else:
-                logger.info(f"[{request_id}] No alarms XXX found for sensor {sensor_id}")
+                logger.debug(f"[{request_id}] No alarms XXX found for sensor {sensor_id}")
                 return {
                     "alert_ids": created_alert_ids,
                     "triggered_alarms": triggered_alarms,

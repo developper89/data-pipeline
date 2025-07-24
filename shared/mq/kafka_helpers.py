@@ -1,4 +1,5 @@
 # shared/mq/kafka_helpers.py
+import base64
 import json
 import logging
 from confluent_kafka import Producer, Consumer, KafkaError, KafkaException, TopicPartition
@@ -565,6 +566,7 @@ class AsyncResilientKafkaConsumer:
                     try:
                         # Parse JSON value if present
                         msg_value = msg.value()
+                        
                         if msg_value is not None:
                             if isinstance(msg_value, bytes):
                                 parsed_value = json.loads(msg_value.decode('utf-8'))
@@ -572,7 +574,12 @@ class AsyncResilientKafkaConsumer:
                                 parsed_value = json.loads(msg_value)
                         else:
                             parsed_value = None
-                        
+                        if (parsed_value and 
+                            parsed_value.get('metadata') and 
+                            parsed_value.get('metadata').get('mqtt_topic') and
+                            'scheduler_data' in parsed_value.get('metadata').get('mqtt_topic')):
+                            logger.info(f'msg_value: {msg_value}')
+                            logger.info(f"parsed_value: {parsed_value}")
                         # Create a simple wrapper that contains both the message and parsed value
                         class MessageWrapper:
                             def __init__(self, message, parsed_value):
@@ -730,11 +737,11 @@ def publish_message(producer: Producer, topic: str, value: dict, key: str = None
         # Convert Pydantic models to dict if needed
         if hasattr(value, '__dict__') and hasattr(value, 'model_dump'):
             value = model_to_dict(value)
-
         # Serialize value to JSON
+        # logger.info(f"value: {value}")
         value_bytes = json.dumps(value, cls=DateTimeEncoder).encode('utf-8')
-        key_bytes = key.encode('utf-8') if key else None
-        
+        key_bytes = key.encode("utf-8") if key else None
+        # logger.info(f"value_bytes: {value_bytes}")
         # Produce message with callback
         def delivery_report(err, msg):
             if err is not None:

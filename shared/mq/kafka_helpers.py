@@ -578,8 +578,8 @@ class AsyncResilientKafkaConsumer:
                             parsed_value.get('metadata') and 
                             parsed_value.get('metadata').get('mqtt_topic') and
                             'scheduler_data' in parsed_value.get('metadata').get('mqtt_topic')):
-                            logger.info(f'msg_value: {msg_value}')
-                            logger.info(f"parsed_value: {parsed_value}")
+
+                            logger.info(f"parsed_value: {parsed_value.get('payload')}")
                         # Create a simple wrapper that contains both the message and parsed value
                         class MessageWrapper:
                             def __init__(self, message, parsed_value):

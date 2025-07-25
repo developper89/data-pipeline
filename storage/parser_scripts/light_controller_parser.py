@@ -237,14 +237,17 @@ class UnifiedReadingManager:
     
     @staticmethod
     def get_or_create_unified_reading(metadata: dict, device_id: str) -> dict:
-        """Get existing reading from metadata.readings or create new one."""
-        if 'readings' not in metadata:
-            metadata['readings'] = {}
+        """Create base reading and update with passed values if available."""
+        # Always create fresh base reading
+        base_reading = UnifiedReadingManager.create_base_reading(device_id, metadata)
         
-        if 'L' not in metadata['readings']:
-            metadata['readings']['L'] = UnifiedReadingManager.create_base_reading(device_id, metadata)
+        # If metadata contains current values, use them instead of defaults
+        if 'values' in metadata and metadata['values'] is not None:
+            # Update base reading with current task values
+            base_reading['values'] = metadata['values']
+            logger.info(f"Updated base reading with current values (task_count: {metadata['values'][11] if len(metadata['values']) > 11 else 'unknown'})")
         
-        return metadata['readings']['L']
+        return base_reading
     
     @staticmethod
     def update_reading_from_operation(base_reading: dict, decoded: dict, operation_type: str, metadata: dict) -> dict:

@@ -1,4 +1,4 @@
-# storage/parser_scripts/light_parser.py
+# storage/parser_scripts/light_controller_parser.py
 import binascii
 import struct
 import json
@@ -160,109 +160,271 @@ class LightProtocolDecoder:
         else:
             raise ValueError(f"Invalid format: {format}. Must be 'hex' or 'dict'")
 
-class OperationHandler:
-    """Handles different operation types with clear separation of concerns."""
+class UnifiedReadingManager:
+    """Manages a single unified cache reading for light controller devices."""
+    
+    # Constants for datatype structure
+    MAX_TASKS = 15
+    
+    # Datatype labels matching the database schema
+    DATATYPE_LABELS = [
+        "task_time_beg", "task_duration", "task_day", "task_channel",
+        "task_active", "task_run_once", "lux_rate_c1", "lux_rate_c2",
+        "lux_name_c1", "lux_name_c2", "lux_per_month", "task_count"
+    ]
+    
+    DATATYPE_DISPLAY_NAMES = [
+        "Tâche - Heure début", "Tâche - Durée (min)", "Tâche - Jour",
+        "Tâche - Canal", "Tâche - Actif", "Tâche - Unique",
+        "Canal 1 - Taux lux/h", "Canal 2 - Taux lux/h", "Canal 1 - Nom",
+        "Canal 2 - Nom", "Quota mensuel lux", "Nombre de tâches"
+    ]
+    
+    # Value indices in unified reading array
+    VALUE_INDICES = {
+        "task_time_beg": 0,    # List: [task0_time, task1_time, ..., task14_time]
+        "task_duration": 1,    # List: [task0_duration, task1_duration, ...]
+        "task_day": 2,         # List: [task0_day, task1_day, ...]
+        "task_channel": 3,     # List: [task0_channel, task1_channel, ...]
+        "task_active": 4,      # List: [task0_active, task1_active, ...]
+        "task_run_once": 5,    # List: [task0_run_once, task1_run_once, ...]
+        "lux_rate_c1": 6,      # Single integer: Channel 1 lux rate
+        "lux_rate_c2": 7,      # Single integer: Channel 2 lux rate
+        "lux_name_c1": 8,      # Single string: Channel 1 name
+        "lux_name_c2": 9,      # Single string: Channel 2 name
+        "lux_per_month": 10,   # Single integer: Monthly lux quota
+        "task_count": 11       # Single integer: Total number of active tasks
+    }
     
     @staticmethod
-    def handle_read_all(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
-        """Handle Read All response - extract task count from sync_alarm."""
-        task_count = decoded['alarm']['task_id']
-        logger.info(f"Read All response: {task_count} tasks configured")
-        
-        # Validate sync_alarm value for Read All responses
-        if decoded['header']['all'] == 1 and decoded['header']['get_set'] == 0:
-            sync_alarm = decoded.get('sync_alarm', 0)
-            if sync_alarm > 0:
-                logger.debug(f"Valid Read All response with sync_alarm: {sync_alarm}")
+    def create_base_reading(device_id: str, metadata: dict) -> dict:
+        """Create initial unified reading with all datatype labels."""
+        # Initialize task-related values as lists of 15 elements
+        values = [
+            [0] * UnifiedReadingManager.MAX_TASKS,        # task_time_beg
+            [0] * UnifiedReadingManager.MAX_TASKS,        # task_duration
+            [0] * UnifiedReadingManager.MAX_TASKS,        # task_day
+            [0] * UnifiedReadingManager.MAX_TASKS,        # task_channel
+            [False] * UnifiedReadingManager.MAX_TASKS,    # task_active
+            [False] * UnifiedReadingManager.MAX_TASKS,    # task_run_once
+            0,      # lux_rate_c1
+            0,      # lux_rate_c2
+            "",     # lux_name_c1
+            "",     # lux_name_c2
+            0,      # lux_per_month
+            0       # task_count
+        ]
         
         reading = SensorReading(
             device_id=device_id,
-            values=(task_count,),
-            labels=('task_count',),
-            display_names=('Nombre de tâches',),
+            values=tuple(values),
+            labels=tuple(UnifiedReadingManager.DATATYPE_LABELS),
+            display_names=tuple(UnifiedReadingManager.DATATYPE_DISPLAY_NAMES),
             timestamp=datetime.now(),
             metadata={
-                'operation': decoded['operation'],
-                'task_count': task_count,
+                'persist': [False] * len(UnifiedReadingManager.DATATYPE_LABELS),
+                'operation': 'initialization',
+                'task_count': 0,
                 **metadata
             },
             index='L'
-        )
-        return [asdict(reading)]
-    
-    @staticmethod
-    def handle_create_task(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
-        """Handle task creation/update operations."""
-        reading = OperationHandler._create_task_reading(device_id, decoded, metadata)
-        return [reading] if reading else []
-    
-    @staticmethod
-    def _create_task_reading(device_id: str, decoded: Dict[str, Any], metadata: dict) -> Optional[dict]:
-        """Create optimized task reading with cached string formatting."""
-        alarm = decoded['alarm']
-        task_id = alarm['task_id']
-        
-        # Pre-build task prefix for efficiency
-        task_prefix = f"task_{task_id}"
-        
-        # Optimized tuple creation (immutable and faster)
-        values = (
-            alarm['time_beg'],
-            alarm['duration'], 
-            alarm['day'],
-            alarm['channel'],
-            alarm['active'],
-            alarm['run_once']
-        )
-        
-        # Optimized label generation
-        base_labels = ('time_beg', 'duration', 'day', 'channel', 'active', 'run_once')
-        labels = tuple(f"{task_prefix}_{label}" for label in base_labels)
-        
-        # Optimized display names
-        task_display = f"Tâche {task_id}"
-        display_suffixes = ('- Heure début', '- Durée (min)', '- Jour', '- Canal', '- Actif', '- Unique')
-        display_names = tuple(f"{task_display} {suffix}" for suffix in display_suffixes)
-        
-        reading = SensorReading(
-            device_id=device_id,
-            values=values,
-            labels=labels,
-            display_names=display_names,
-            timestamp=datetime.now(),
-            metadata={
-                'operation': decoded['operation'],
-                'task_id': task_id,
-                **metadata
-            },
-            index="L"
         )
         
         return asdict(reading)
     
     @staticmethod
+    def get_or_create_unified_reading(metadata: dict, device_id: str) -> dict:
+        """Get existing reading from metadata.readings or create new one."""
+        if 'readings' not in metadata:
+            metadata['readings'] = {}
+        
+        if 'L' not in metadata['readings']:
+            metadata['readings']['L'] = UnifiedReadingManager.create_base_reading(device_id, metadata)
+        
+        return metadata['readings']['L']
+    
+    @staticmethod
+    def update_reading_from_operation(base_reading: dict, decoded: dict, operation_type: str, metadata: dict) -> dict:
+        """Update unified reading based on operation type and data."""
+        # Convert values to mutable lists for updating
+        values = [list(v) if isinstance(v, (list, tuple)) else v for v in base_reading['values']]
+        
+        if operation_type == 'read_all':
+            # Update task count from decoded alarm.task_id
+            task_count = decoded['alarm']['task_id']
+            values[UnifiedReadingManager.VALUE_INDICES['task_count']] = task_count
+            logger.info(f"Updated task_count to {task_count}")
+            
+        elif operation_type in ['create_task', 'read_task']:
+            # Update specific task data at task_id index
+            alarm = decoded['alarm']
+            task_id = alarm['task_id']
+            
+            if 0 <= task_id < UnifiedReadingManager.MAX_TASKS:
+                # Update task lists at specific task_id index
+                values[UnifiedReadingManager.VALUE_INDICES['task_time_beg']][task_id] = alarm['time_beg']
+                values[UnifiedReadingManager.VALUE_INDICES['task_duration']][task_id] = alarm['duration']
+                values[UnifiedReadingManager.VALUE_INDICES['task_day']][task_id] = alarm['day']
+                values[UnifiedReadingManager.VALUE_INDICES['task_channel']][task_id] = alarm['channel']
+                values[UnifiedReadingManager.VALUE_INDICES['task_active']][task_id] = bool(alarm['active'])
+                values[UnifiedReadingManager.VALUE_INDICES['task_run_once']][task_id] = bool(alarm['run_once'])
+                
+                # Update task count if this is a new active task
+                if operation_type == 'create_task' and alarm['active']:
+                    current_task_count = values[UnifiedReadingManager.VALUE_INDICES['task_count']]
+                    # Count active tasks
+                    active_count = sum(1 for active in values[UnifiedReadingManager.VALUE_INDICES['task_active']] if active)
+                    values[UnifiedReadingManager.VALUE_INDICES['task_count']] = active_count
+                
+                logger.info(f"Updated task {task_id} data for operation {operation_type}")
+            else:
+                logger.warning(f"Invalid task_id {task_id}, must be 0-{UnifiedReadingManager.MAX_TASKS-1}")
+                
+        elif operation_type == 'delete_task':
+            # Reset specific task to default values
+            task_id = decoded['alarm']['task_id']
+            
+            if 0 <= task_id < UnifiedReadingManager.MAX_TASKS:
+                values[UnifiedReadingManager.VALUE_INDICES['task_time_beg']][task_id] = 0
+                values[UnifiedReadingManager.VALUE_INDICES['task_duration']][task_id] = 0
+                values[UnifiedReadingManager.VALUE_INDICES['task_day']][task_id] = 0
+                values[UnifiedReadingManager.VALUE_INDICES['task_channel']][task_id] = 0
+                values[UnifiedReadingManager.VALUE_INDICES['task_active']][task_id] = False
+                values[UnifiedReadingManager.VALUE_INDICES['task_run_once']][task_id] = False
+                
+                # Update task count
+                active_count = sum(1 for active in values[UnifiedReadingManager.VALUE_INDICES['task_active']] if active)
+                values[UnifiedReadingManager.VALUE_INDICES['task_count']] = active_count
+                
+                logger.info(f"Deleted task {task_id}, active count now {active_count}")
+            else:
+                logger.warning(f"Invalid task_id {task_id}, must be 0-{UnifiedReadingManager.MAX_TASKS-1}")
+                
+        elif operation_type == 'delete_all':
+            # Reset all task lists to default values
+            values[UnifiedReadingManager.VALUE_INDICES['task_time_beg']] = [0] * UnifiedReadingManager.MAX_TASKS
+            values[UnifiedReadingManager.VALUE_INDICES['task_duration']] = [0] * UnifiedReadingManager.MAX_TASKS
+            values[UnifiedReadingManager.VALUE_INDICES['task_day']] = [0] * UnifiedReadingManager.MAX_TASKS
+            values[UnifiedReadingManager.VALUE_INDICES['task_channel']] = [0] * UnifiedReadingManager.MAX_TASKS
+            values[UnifiedReadingManager.VALUE_INDICES['task_active']] = [False] * UnifiedReadingManager.MAX_TASKS
+            values[UnifiedReadingManager.VALUE_INDICES['task_run_once']] = [False] * UnifiedReadingManager.MAX_TASKS
+            values[UnifiedReadingManager.VALUE_INDICES['task_count']] = 0
+            
+            logger.info("Deleted all tasks")
+        
+        # Update the reading with new values and metadata
+        updated_reading = base_reading.copy()
+        updated_reading['values'] = tuple(values)
+        updated_reading['timestamp'] = datetime.now().isoformat()
+        updated_reading['metadata'].update({
+            'operation': operation_type,
+            'task_count': values[UnifiedReadingManager.VALUE_INDICES['task_count']],
+            **metadata
+        })
+        
+        return updated_reading
+
+
+class OperationHandler:
+    """Handles different operation types using unified reading approach."""
+    
+    @staticmethod
+    def handle_read_all(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
+        """Handle Read All response using unified reading."""
+        # Get or create unified reading from metadata
+        unified_reading = UnifiedReadingManager.get_or_create_unified_reading(metadata, device_id)
+        
+        # Update reading with read_all operation data
+        updated_reading = UnifiedReadingManager.update_reading_from_operation(
+            unified_reading, decoded, 'read_all', metadata
+        )
+        
+        # Store updated reading back in metadata
+        metadata['readings']['L'] = updated_reading
+        logger.info(updated_reading)
+        return [updated_reading]
+    
+    @staticmethod
+    def handle_create_task(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
+        """Handle task creation/update using unified reading."""
+        # Get or create unified reading from metadata
+        unified_reading = UnifiedReadingManager.get_or_create_unified_reading(metadata, device_id)
+        
+        # Update reading with create_task operation data
+        updated_reading = UnifiedReadingManager.update_reading_from_operation(
+            unified_reading, decoded, 'create_task', metadata
+        )
+        
+        # Store updated reading back in metadata
+        metadata['readings']['L'] = updated_reading
+        
+        return [updated_reading]
+    
+    @staticmethod
     def handle_read_task(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
-        """Handle Read Single Task operation - returns specific task data."""
-        # For read_task responses, parse the specific task data
-        reading = OperationHandler._create_task_reading(device_id, decoded, metadata)
-        return [reading] if reading else []
+        """Handle Read Single Task operation using unified reading."""
+        # Get or create unified reading from metadata
+        unified_reading = UnifiedReadingManager.get_or_create_unified_reading(metadata, device_id)
+        
+        # Update reading with read_task operation data
+        updated_reading = UnifiedReadingManager.update_reading_from_operation(
+            unified_reading, decoded, 'read_task', metadata
+        )
+        
+        # Store updated reading back in metadata
+        metadata['readings']['L'] = updated_reading
+        
+        return [updated_reading]
     
     @staticmethod
     def handle_delete_task(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
-        """Handle Delete Task operation response."""
-        # Delete operations typically don't return data, just acknowledgment
-        logger.info(f"Delete task operation completed for device {device_id}")
-        return []
+        """Handle Delete Task operation using unified reading."""
+        # Get or create unified reading from metadata
+        unified_reading = UnifiedReadingManager.get_or_create_unified_reading(metadata, device_id)
+        
+        # Update reading with delete_task operation data
+        updated_reading = UnifiedReadingManager.update_reading_from_operation(
+            unified_reading, decoded, 'delete_task', metadata
+        )
+        
+        # Store updated reading back in metadata
+        metadata['readings']['L'] = updated_reading
+        
+        return [updated_reading]
     
     @staticmethod
     def handle_delete_all(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
-        """Handle Delete All Tasks operation response."""
-        # Delete all operations typically don't return data, just acknowledgment
-        logger.info(f"Delete all tasks operation completed for device {device_id}")
-        return []
+        """Handle Delete All Tasks operation using unified reading."""
+        # Get or create unified reading from metadata
+        unified_reading = UnifiedReadingManager.get_or_create_unified_reading(metadata, device_id)
+        
+        # Update reading with delete_all operation data
+        updated_reading = UnifiedReadingManager.update_reading_from_operation(
+            unified_reading, decoded, 'delete_all', metadata
+        )
+        
+        # Store updated reading back in metadata
+        metadata['readings']['L'] = updated_reading
+        
+        return [updated_reading]
 
 def parse(payload: str, metadata: dict, config: dict, message_parser=None) -> Optional[ParseResult]:
-    """Clean, optimized main parser with clear operation dispatch."""
+    """
+    Main parser using unified reading system for light controller devices.
+    
+    Returns a single unified reading that matches the datatype schema exactly,
+    with task-related values stored as lists where index corresponds to task_id.
+    The reading is persisted in metadata.readings['L'] for state management.
+    
+    Args:
+        payload: Hex-encoded binary response from light controller
+        metadata: Message metadata (will be updated with readings)
+        config: Hardware configuration
+        message_parser: Optional message parser (unused)
+        
+    Returns:
+        ParseResult with single unified reading or None on error
+    """
     device_id = metadata.get('device_id', 'unknown')
     
     # Input validation

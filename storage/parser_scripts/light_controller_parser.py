@@ -272,12 +272,18 @@ class UnifiedReadingManager:
                 values[UnifiedReadingManager.VALUE_INDICES['task_active']][task_id] = bool(alarm['active'])
                 values[UnifiedReadingManager.VALUE_INDICES['task_run_once']][task_id] = bool(alarm['run_once'])
                 
-                # Update task count if this is a new active task
-                if operation_type == 'create_task' and alarm['active']:
-                    current_task_count = values[UnifiedReadingManager.VALUE_INDICES['task_count']]
-                    # Count active tasks
+                # For create_task, always recalculate task_count
+                # For read_task, recalculate task_count to ensure consistency
+                if operation_type == 'create_task':
+                    # Count active tasks after creation
                     active_count = sum(1 for active in values[UnifiedReadingManager.VALUE_INDICES['task_active']] if active)
                     values[UnifiedReadingManager.VALUE_INDICES['task_count']] = active_count
+                    logger.info(f"Updated task_count to {active_count} after create_task")
+                elif operation_type == 'read_task':
+                    # Recalculate task_count to ensure consistency with current active tasks
+                    active_count = sum(1 for active in values[UnifiedReadingManager.VALUE_INDICES['task_active']] if active)
+                    values[UnifiedReadingManager.VALUE_INDICES['task_count']] = active_count
+                    logger.info(f"Recalculated task_count to {active_count} after read_task")
                 
                 logger.info(f"Updated task {task_id} data for operation {operation_type}")
             else:

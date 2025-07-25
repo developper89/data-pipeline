@@ -174,6 +174,7 @@ connectors:
                   type: "component"
                   component: "LightControlCard.mafabrique" # Will resolve to LightControlCard.mafabrique
                   placement: "overview"
+
               - command_type: "light_read_all"
                 format_type: "binary"
                 topic_pattern: "broker_data/{device_id}/command"
@@ -185,7 +186,18 @@ connectors:
                   icon: "pi pi-refresh"
                 priority: 1
 
-              - command_type: "light_config"
+              - command_type: "light_read_single"
+                format_type: "binary"
+                topic_pattern: "broker_data/{device_id}/command"
+                templating:
+                  type: "button"
+                  display_name: "Rafraîchir"
+                  class: "p-button-primary"
+                  tooltip: "Lire la tâche programmée"
+                  icon: "pi pi-refresh"
+                priority: 1
+
+              - command_type: "light_config_task"
                 topic_pattern: "broker_data/{device_id}/command"
                 templating:
                   type: "button"
@@ -215,7 +227,8 @@ connectors:
           validation:
             supported_commands:
               - "light_read_all"
-              - "light_config"
+              - "light_read_single"
+              - "light_config_task"
               - "light_delete_task"
               - "light_delete_all"
         priority: 2

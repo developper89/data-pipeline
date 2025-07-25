@@ -542,25 +542,10 @@ def extract_broker_id(source_topic: str) -> str:
     
     return broker_id
 
-def safe_hex_decode(hex_string):
-    """Safely decode hex string to bytes."""
-    if not hex_string:
-        return None
-    
-    try:
-        return bytes.fromhex(hex_string)
-    except ValueError as e:
-        print(f"Invalid hex string '{hex_string}': {e}")
-        return None
-
 def parse_feedback(payload: any, metadata: dict, config: Optional[dict] = None, message_parser: Optional[Any] = None) -> Tuple[str, dict]:
     """Parse feedback for Fluxor devices using proprietary message_parser."""
     device_id = metadata.get('device_id')
-    logger.info(f"parse_feedback payload: {payload}")
-    # payload_bytes = safe_hex_decode(payload)
-    # logger.info(f"payload_bytes: {payload_bytes}")
 
-    
     # If payload is numeric (either int or numeric string), return None
     if isinstance(payload, int):
         return None, None

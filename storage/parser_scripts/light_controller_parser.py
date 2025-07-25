@@ -2,7 +2,7 @@
 import binascii
 import struct
 import json
-from typing import List, Dict, Any, Tuple, Optional, NamedTuple
+from typing import List, Dict, Any, Tuple, Optional, NamedTuple, Union
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 import logging
@@ -31,12 +31,17 @@ class Alarm(NamedTuple):
 class SensorReading:
     """Optimized with slots for memory efficiency and frozen for immutability."""
     device_id: str
-    values: Tuple[Any, ...]  # Tuple for immutability and memory efficiency
+    values: Tuple[Any, ...]
     labels: Optional[Tuple[str, ...]] = None
     display_names: Optional[Tuple[str, ...]] = None
     timestamp: datetime = field(default_factory=datetime.now)
     metadata: Dict[str, Any] = field(default_factory=dict)
     index: str = "L"
+
+class ParseResult(NamedTuple):
+    """Type-safe parse result."""
+    result_type: str
+    readings: List[dict]
 
 class LightProtocolDecoder:
     """Optimized decoder with cached operations and better error handling."""
@@ -70,13 +75,13 @@ class LightProtocolDecoder:
     }
     
     @classmethod
-    def decode_packet(cls, binary_data: str) -> Dict[str, Any]:
+    def decode_packet(cls, binary_data: bytes) -> Dict[str, Any]:
         """Optimized packet decoding with better error handling."""
-        if not binary_data or len(binary_data) < 13:  # 13 bytes = 26 hex chars
-            raise ValueError(f"Invalid packet length: {len(binary_data)//2} bytes (minimum 13 required)")
+        if len(binary_data) < 13:
+            raise ValueError(f"Invalid packet length: {len(binary_data)} bytes (minimum 13 required)")
         
         # Optimized unpacking in single operation - LITTLE ENDIAN!
-        id_capteur, epoch, sync_header, sync_alarm = struct.unpack('=IIBI', binary_data)
+        id_capteur, epoch, sync_header, sync_alarm = struct.unpack('=IIBI', binary_data[:13])
         
         # Optimized bit extraction using pre-computed masks
         header = Header(
@@ -106,11 +111,12 @@ class LightProtocolDecoder:
             'epoch': epoch,
             'header': header._asdict(),
             'alarm': alarm._asdict(),
-            'operation': operation
+            'operation': operation,
+            'sync_alarm': sync_alarm  # Keep for validation
         }
     
     @classmethod
-    def encode_packet(cls, data: Dict[str, Any], format: str = "dict") -> str:
+    def encode_packet(cls, data: Dict[str, Any], format: str = "dict") -> Union[Dict[str, Any], str]:
         """Optimized packet encoding with validation."""
         header = data.get("header", {})
         alarm = data.get("alarm", {})
@@ -153,82 +159,154 @@ class LightProtocolDecoder:
             return binary_data.hex()
         else:
             raise ValueError(f"Invalid format: {format}. Must be 'hex' or 'dict'")
-          
 
-def safe_hex_decode(hex_string):
-    """Safely decode hex string to bytes."""
-    if not hex_string:
-        return None
+class OperationHandler:
+    """Handles different operation types with clear separation of concerns."""
     
-    try:
-        return bytes.fromhex(hex_string)
-    except ValueError as e:
-        print(f"Invalid hex string '{hex_string}': {e}")
-        return None
+    @staticmethod
+    def handle_read_all(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
+        """Handle Read All response - extract task count from sync_alarm."""
+        task_count = decoded['alarm']['task_id']
+        logger.info(f"Read All response: {task_count} tasks configured")
+        
+        # Validate sync_alarm value for Read All responses
+        if decoded['header']['all'] == 1 and decoded['header']['get_set'] == 0:
+            sync_alarm = decoded.get('sync_alarm', 0)
+            if sync_alarm > 0:
+                logger.debug(f"Valid Read All response with sync_alarm: {sync_alarm}")
+        
+        reading = SensorReading(
+            device_id=device_id,
+            values=(task_count,),
+            labels=('task_count',),
+            display_names=('Nombre de tâches',),
+            timestamp=datetime.now(),
+            metadata={
+                'operation': decoded['operation'],
+                'task_count': task_count,
+                **metadata
+            },
+            index='L'
+        )
+        return [asdict(reading)]
     
-def parse(payload: str, metadata: dict, config: dict, message_parser=None) -> Tuple[str, List[dict]]:
-    """Optimized main parser with better error handling."""
+    @staticmethod
+    def handle_create_task(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
+        """Handle task creation/update operations."""
+        reading = OperationHandler._create_task_reading(device_id, decoded, metadata)
+        return [reading] if reading else []
+    
+    @staticmethod
+    def _create_task_reading(device_id: str, decoded: Dict[str, Any], metadata: dict) -> Optional[dict]:
+        """Create optimized task reading with cached string formatting."""
+        alarm = decoded['alarm']
+        task_id = alarm['task_id']
+        
+        # Pre-build task prefix for efficiency
+        task_prefix = f"task_{task_id}"
+        
+        # Optimized tuple creation (immutable and faster)
+        values = (
+            alarm['time_beg'],
+            alarm['duration'], 
+            alarm['day'],
+            alarm['channel'],
+            alarm['active'],
+            alarm['run_once']
+        )
+        
+        # Optimized label generation
+        base_labels = ('time_beg', 'duration', 'day', 'channel', 'active', 'run_once')
+        labels = tuple(f"{task_prefix}_{label}" for label in base_labels)
+        
+        # Optimized display names
+        task_display = f"Tâche {task_id}"
+        display_suffixes = ('- Heure début', '- Durée (min)', '- Jour', '- Canal', '- Actif', '- Unique')
+        display_names = tuple(f"{task_display} {suffix}" for suffix in display_suffixes)
+        
+        reading = SensorReading(
+            device_id=device_id,
+            values=values,
+            labels=labels,
+            display_names=display_names,
+            timestamp=datetime.now(),
+            metadata={
+                'operation': decoded['operation'],
+                'task_id': task_id,
+                **metadata
+            },
+            index="L"
+        )
+        
+        return asdict(reading)
+    
+    @staticmethod
+    def handle_read_task(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
+        """Handle Read Single Task operation - returns specific task data."""
+        # For read_task responses, parse the specific task data
+        reading = OperationHandler._create_task_reading(device_id, decoded, metadata)
+        return [reading] if reading else []
+    
+    @staticmethod
+    def handle_delete_task(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
+        """Handle Delete Task operation response."""
+        # Delete operations typically don't return data, just acknowledgment
+        logger.info(f"Delete task operation completed for device {device_id}")
+        return []
+    
+    @staticmethod
+    def handle_delete_all(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
+        """Handle Delete All Tasks operation response."""
+        # Delete all operations typically don't return data, just acknowledgment
+        logger.info(f"Delete all tasks operation completed for device {device_id}")
+        return []
+
+def parse(payload: str, metadata: dict, config: dict, message_parser=None) -> Optional[ParseResult]:
+    """Clean, optimized main parser with clear operation dispatch."""
     device_id = metadata.get('device_id', 'unknown')
-
+    
+    # Input validation
+    if not payload:
+        logger.warning(f"Empty payload from device {device_id}")
+        return None
+    
     try:
+        # Decode binary data
         binary_data = binascii.unhexlify(payload)
+        if binary_data is None:
+            logger.error(f"Failed to decode hex payload from {device_id}")
+            return None
+        
+        # Decode packet
         decoded = LightProtocolDecoder.decode_packet(binary_data)
         operation = decoded['operation']
-        logger.info(f"decoded: {decoded}")
-        # Only create readings for relevant operations
-        if operation in ('read_all', 'create_task'):
-            reading = _create_task_reading(device_id, decoded, metadata)
-            return ("data", [reading] if reading else [])
+        logger.info(f"Device {device_id} operation: {operation}")
         
-        return ("data", [])
-    
+        # Operation dispatch table for clean separation
+        operation_handlers = {
+            'read_task': OperationHandler.handle_read_task,
+            'read_all': OperationHandler.handle_read_all,
+            'create_task': OperationHandler.handle_create_task,
+            'delete_task': OperationHandler.handle_delete_task,
+            'delete_all': OperationHandler.handle_delete_all
+        }
+        
+        # Execute operation handler
+        handler = operation_handlers.get(operation)
+        if handler:
+            readings = handler(device_id, decoded, metadata)
+            return ParseResult("data", readings)
+        
+        # Unknown or unhandled operation
+        logger.debug(f"Unhandled operation '{operation}' from device {device_id}")
+        return None
+        
+    except struct.error as e:
+        logger.error(f"Struct unpacking error for device {device_id}: {e}")
+        return None
     except Exception as e:
-        logger.error(f"Error parsing light message from {device_id}: {e}")
-        return ("data", [])
-
-def _create_task_reading(device_id: str, decoded: Dict[str, Any], metadata: dict) -> Optional[dict]:
-    """Optimized task reading creation with cached string formatting."""
-    
-    alarm = decoded['alarm']
-    task_id = alarm['task_id']
-    
-    # Pre-build task prefix for efficiency
-    task_prefix = f"task_{task_id}"
-    
-    # Optimized tuple creation (immutable and faster)
-    values = (
-        alarm['time_beg'],
-        alarm['duration'], 
-        alarm['day'],
-        alarm['channel'],
-        alarm['active'],
-        alarm['run_once']
-    )
-    
-    # Optimized label generation with list comprehension
-    base_labels = ('time_beg', 'duration', 'day', 'channel', 'active', 'run_once')
-    labels = tuple(f"{task_prefix}_{label}" for label in base_labels)
-    
-    # Optimized display names with precomputed task display
-    task_display = f"Tâche {task_id}"
-    display_suffixes = ('- Heure début', '- Durée (min)', '- Jour', '- Canal', '- Actif', '- Unique')
-    display_names = tuple(f"{task_display} {suffix}" for suffix in display_suffixes)
-    
-    reading = SensorReading(
-        device_id=device_id,
-        values=values,
-        labels=labels,
-        display_names=display_names,
-        timestamp=datetime.now(),
-        metadata={
-            'operation': decoded['operation'],
-            'task_id': task_id,
-            **metadata
-        },
-        index="L"
-    )
-    
-    return asdict(reading)
+        logger.error(f"Unexpected error parsing message from {device_id}: {e}")
+        return None
 
 # Command formatting functions optimized for reusability
 class CommandFormatter:
@@ -262,22 +340,16 @@ class CommandFormatter:
     @staticmethod
     def _encode_and_wrap(packet_data: Dict[str, Any], command_type: str) -> str:
         """Shared encoding and wrapping logic."""
-        encoded_hex = LightProtocolDecoder.encode_packet(packet_data)
-        # mqtt_payload = {
-        #     'data': encoded_hex,
-        #     'type': command_type,
-        #     'timestamp': packet_data['epoch']
-        # }
-        # return json.dumps(mqtt_payload, separators=(',', ':'))  # Compact JSON
-        return encoded_hex
+        return LightProtocolDecoder.encode_packet(packet_data, format="hex")
 
-def format_command(command: dict, config: dict, message_parser=None) -> str:
+def format_command(command: dict, config: dict, message_parser=None) -> dict:
     """Optimized command dispatcher with lookup table."""
     command_type = command.get('command_type', '')
     
     # Command handler lookup table for O(1) dispatch
     handlers = {
-        'light_config': _format_light_config_command,
+        'light_config_task': _format_light_config_task_command,
+        'light_read_single': _format_read_single_command,
         'light_read_all': _format_read_all_command, 
         'light_delete_task': _format_delete_task_command,
         'light_delete_all': _format_delete_all_command
@@ -289,9 +361,10 @@ def format_command(command: dict, config: dict, message_parser=None) -> str:
         
     payload = handler(command, config)
     metadata = command.get('metadata', {})
-    broker_id = metadata.get('broker')
+    broker_id = metadata.get('broker_parameter')
     command_id = command.get('request_id')
-    command = {
+    
+    formatted_command = {
         "payload": {"uid": f"{command_id}-{broker_id}", **payload},
         "metadata": {
             "device_id": command['device_id'],
@@ -301,11 +374,11 @@ def format_command(command: dict, config: dict, message_parser=None) -> str:
             "retain": False
         }
     }
-    logger.info(f"command: {command}")
-    return command
+    logger.info(f"Formatted command: {formatted_command}")
+    return formatted_command
 
-def _format_light_config_command(command: dict, config: dict) -> str:
-    """Optimized config command formatting."""
+def _format_light_config_task_command(command: dict, config: dict) -> dict:
+    """Format command to create or update a task (get_set=1, all=0, clear=0)."""
     payload = command['payload']
     task_id = payload.get('task_id', 0)
     
@@ -323,20 +396,32 @@ def _format_light_config_command(command: dict, config: dict) -> str:
         }
     )
     
-    return CommandFormatter._encode_and_wrap(packet_data, 'light_config')
+    return LightProtocolDecoder.encode_packet(packet_data)
 
-def _format_read_all_command(command: dict, config: dict) -> str:
-    """Optimized read all command formatting."""
+def _format_read_single_command(command: dict, config: dict) -> dict:
+    """Format command to read a single task by ID (get_set=0, all=0, clear=0)."""
+    task_id = command['payload'].get('task_id', 0)
+    
+    packet_data = CommandFormatter._build_base_packet(
+        command['device_id'],
+        {'task_id': task_id, 'get_set': 0},  # Read single task (get_set=0, all=0, clear=0)
+        {'task_id': task_id}
+    )
+    
+    return LightProtocolDecoder.encode_packet(packet_data)
+
+def _format_read_all_command(command: dict, config: dict) -> dict:
+    """Format command to read all tasks - returns task count (get_set=0, all=1, clear=0)."""
     packet_data = CommandFormatter._build_base_packet(
         command['device_id'],
         {'all': 1, 'get_set': 0},  # Read all
         {}
     )
-    logger.info(f"packet_data: {packet_data}")
-    return CommandFormatter._encode_and_wrap(packet_data, 'light_read_all')
+    logger.debug(f"Read all packet data: {packet_data}")
+    return LightProtocolDecoder.encode_packet(packet_data)
 
-def _format_delete_task_command(command: dict, config: dict) -> str:
-    """Optimized delete task command formatting."""
+def _format_delete_task_command(command: dict, config: dict) -> dict:
+    """Format command to delete a single task by ID (get_set=1, all=0, clear=1)."""
     task_id = command['payload'].get('task_id', 0)
     
     packet_data = CommandFormatter._build_base_packet(
@@ -345,14 +430,14 @@ def _format_delete_task_command(command: dict, config: dict) -> str:
         {'task_id': task_id}
     )
     
-    return CommandFormatter._encode_and_wrap(packet_data, 'light_delete_task')
+    return LightProtocolDecoder.encode_packet(packet_data)
 
-def _format_delete_all_command(command: dict, config: dict) -> str:
-    """Optimized delete all command formatting."""
+def _format_delete_all_command(command: dict, config: dict) -> dict:
+    """Format command to delete all tasks (get_set=1, all=1, clear=1)."""
     packet_data = CommandFormatter._build_base_packet(
         command['device_id'], 
         {'all': 1, 'clear': 1, 'get_set': 1},  # Delete all
         {}
     )
     
-    return CommandFormatter._encode_and_wrap(packet_data, 'light_delete_all')
+    return LightProtocolDecoder.encode_packet(packet_data)

@@ -206,7 +206,7 @@ def test_unified_reading_structure():
             f"task_count: {type(reading['values'][11]).__name__}",
         ],
         "labels": reading['labels'],
-        "datatype_id": reading['metadata']['datatype_id']
+        "metadata_keys": list(reading['metadata'].keys())
     }, indent=2))
 
 def main():

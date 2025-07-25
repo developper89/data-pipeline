@@ -215,6 +215,9 @@ class UnifiedReadingManager:
             0       # task_count
         ]
         
+        # Create clean metadata without 'readings' key
+        clean_metadata = {k: v for k, v in metadata.items() if k != 'readings'}
+        
         reading = SensorReading(
             device_id=device_id,
             values=tuple(values),
@@ -225,7 +228,7 @@ class UnifiedReadingManager:
                 'persist': [False] * len(UnifiedReadingManager.DATATYPE_LABELS),
                 'operation': 'initialization',
                 'task_count': 0,
-                **metadata
+                **clean_metadata
             },
             index='L'
         )
@@ -316,10 +319,14 @@ class UnifiedReadingManager:
         updated_reading = base_reading.copy()
         updated_reading['values'] = tuple(values)
         updated_reading['timestamp'] = datetime.now().isoformat()
+        
+        # Create clean metadata without 'readings' key to avoid circular reference
+        clean_metadata = {k: v for k, v in metadata.items() if k != 'readings'}
+        
         updated_reading['metadata'].update({
             'operation': operation_type,
             'task_count': values[UnifiedReadingManager.VALUE_INDICES['task_count']],
-            **metadata
+            **clean_metadata
         })
         
         return updated_reading
@@ -339,9 +346,6 @@ class OperationHandler:
             unified_reading, decoded, 'read_all', metadata
         )
         
-        # Store updated reading back in metadata
-        metadata['readings']['L'] = updated_reading
-        logger.info(updated_reading)
         return [updated_reading]
     
     @staticmethod
@@ -354,9 +358,6 @@ class OperationHandler:
         updated_reading = UnifiedReadingManager.update_reading_from_operation(
             unified_reading, decoded, 'create_task', metadata
         )
-        
-        # Store updated reading back in metadata
-        metadata['readings']['L'] = updated_reading
         
         return [updated_reading]
     
@@ -371,9 +372,6 @@ class OperationHandler:
             unified_reading, decoded, 'read_task', metadata
         )
         
-        # Store updated reading back in metadata
-        metadata['readings']['L'] = updated_reading
-        
         return [updated_reading]
     
     @staticmethod
@@ -387,9 +385,6 @@ class OperationHandler:
             unified_reading, decoded, 'delete_task', metadata
         )
         
-        # Store updated reading back in metadata
-        metadata['readings']['L'] = updated_reading
-        
         return [updated_reading]
     
     @staticmethod
@@ -402,9 +397,6 @@ class OperationHandler:
         updated_reading = UnifiedReadingManager.update_reading_from_operation(
             unified_reading, decoded, 'delete_all', metadata
         )
-        
-        # Store updated reading back in metadata
-        metadata['readings']['L'] = updated_reading
         
         return [updated_reading]
 

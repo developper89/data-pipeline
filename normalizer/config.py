@@ -16,6 +16,14 @@ KAFKA_CONSUMER_GROUP_ID = os.getenv("KAFKA_CONSUMER_GROUP_ID", "normalizer_group
 # Time in seconds consumer waits for messages if buffer is empty
 KAFKA_CONSUMER_POLL_TIMEOUT_S = float(os.getenv("KAFKA_CONSUMER_POLL_TIMEOUT_S", "1.0"))
 
+# Redis Configuration
+REDIS_HOST = os.getenv("REDIS_HOST", "redis")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
+REDIS_METADATA_TTL = int(os.getenv("REDIS_METADATA_TTL", "86400"))  # 24 hours
+
+
 # Database Config (URL usually in shared, but acknowledge here)
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:pass@localhost/iot_config")
 

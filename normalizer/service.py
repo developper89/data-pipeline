@@ -4,6 +4,7 @@ import json
 import asyncio  # Needed if using async DB/Script clients
 import os
 import signal
+import inspect  # For parser signature detection
 from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 
@@ -52,6 +53,7 @@ from kafka_producer import NormalizerKafkaProducer  # Import the new wrapper
 from shared.utils.script_client import ScriptClient, ScriptNotFoundError
 from normalizer.validator import Validator  # Import the validator
 from normalizer.alarm_handler import AlarmHandler  # Import the alarm handler
+from normalizer.cache_context import CacheContext  # Import the new cache context
 from shared.config_loader import get_translator_configs
 from shared.translation.factory import TranslatorFactory
 
@@ -71,7 +73,8 @@ class NormalizerService:
         alarm_repository: Optional[SQLAlarmRepository] = None,
         alert_repository: Optional[SQLAlertRepository] = None,
         user_repository: Optional[SQLUserRepository] = None,
-        broker_repository: Optional[SQLBrokerRepository] = None
+        broker_repository: Optional[SQLBrokerRepository] = None,
+        sensor_cache_service=None  # New parameter for cache context
     ):
         self.datatype_repository = datatype_repository
         self.sensor_repository = sensor_repository
@@ -87,6 +90,14 @@ class NormalizerService:
         self.script_client = ScriptClient(
             storage_type=config.SCRIPT_STORAGE_TYPE, local_dir=config.LOCAL_SCRIPT_DIR
         )
+        
+        # Initialize cache context if sensor cache service is provided
+        self.cache_context = None
+        if sensor_cache_service:
+            self.cache_context = CacheContext(sensor_cache_service)
+            logger.info("Cache context initialized for parser scripts")
+        else:
+            logger.info("Cache context not initialized - sensor cache service not provided")
         
         # Initialize validator if repositories are provided
         self.validator = None
@@ -296,16 +307,59 @@ class NormalizerService:
                     
                     # Get the method to call dynamically
                     action_method = getattr(script_module, action)
-                    # logger.info(f"payload_bytes: {payload_bytes}, {type(payload_bytes)}")
-                    action_result = action_method(
-                        payload=payload_bytes,  # Pass bytes to parser
-                        metadata={
-                            **raw_message.metadata,  # Pass the raw message metadata
-                            'device_id': raw_message.device_id  # Include device_id in config
-                        },
-                        config=hardware_config,
-                        message_parser=getattr(translator_instance, 'message_parser', None)  # Pass the message parser instance if available
-                    )
+                    
+                    # Check if parser supports cache context (backwards compatibility)
+                    parser_signature = inspect.signature(action_method)
+                    supports_cache_context = 'cache_context' in parser_signature.parameters
+                    
+                    # Prepare metadata for parser
+                    parser_metadata = {
+                        **raw_message.metadata,  # Pass the raw message metadata
+                        'device_id': raw_message.device_id  # Include device_id in metadata
+                    }
+                    
+                    # Check if parser is async (for cache-aware parsers)
+                    is_async_parser = asyncio.iscoroutinefunction(action_method)
+                    # Call parser with or without cache context
+                    if supports_cache_context and self.cache_context:
+                        logger.info(f"[{request_id}] Calling parser with cache context for device {raw_message.device_id}")
+                        if is_async_parser:
+                            action_result = await action_method(
+                                payload=payload_bytes,
+                                metadata=parser_metadata,
+                                config=hardware_config,
+                                message_parser=getattr(translator_instance, 'message_parser', None),
+                                cache_context=self.cache_context  # NEW: Pass cache context
+                            )
+                        else:
+                            action_result = action_method(
+                                payload=payload_bytes,
+                                metadata=parser_metadata,
+                                config=hardware_config,
+                                message_parser=getattr(translator_instance, 'message_parser', None),
+                                cache_context=self.cache_context  # NEW: Pass cache context
+                            )
+                    else:
+                        # Backwards compatibility for parsers that don't support cache context
+                        if not supports_cache_context:
+                            logger.debug(f"[{request_id}] Parser does not support cache context")
+                        elif not self.cache_context:
+                            logger.debug(f"[{request_id}] Cache context not available")
+                        
+                        if is_async_parser:
+                            action_result = await action_method(
+                                payload=payload_bytes,
+                                metadata=parser_metadata,
+                                config=hardware_config,
+                                message_parser=getattr(translator_instance, 'message_parser', None)
+                            )
+                        else:
+                            action_result = action_method(
+                                payload=payload_bytes,
+                                metadata=parser_metadata,
+                                config=hardware_config,
+                                message_parser=getattr(translator_instance, 'message_parser', None)
+                            )
                     
                     # Handle different response formats
                     if isinstance(action_result, tuple) and len(action_result) == 2:

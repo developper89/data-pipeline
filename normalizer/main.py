@@ -14,7 +14,10 @@ from preservarium_sdk.infrastructure.sql_repository.sql_alarm_repository import 
 from preservarium_sdk.infrastructure.sql_repository.sql_alert_repository import SQLAlertRepository
 from preservarium_sdk.infrastructure.sql_repository.sql_user_repository import SQLUserRepository
 from preservarium_sdk.infrastructure.sql_repository.sql_broker_repository import SQLBrokerRepository
+from preservarium_sdk.infrastructure.redis_repository.redis_base_repository import RedisBaseRepository
+from preservarium_sdk.domain.service.sensor_cache_service import SensorCacheService
 from sqlalchemy.ext.asyncio import AsyncSession
+from preservarium_sdk.core.config import RedisSettings
 
 # Ensure other local modules are importable if running as main
 # sys.path.append(os.path.dirname(__file__)) # Or use `python -m normalizer_service.main`
@@ -117,6 +120,22 @@ async def manage_service(db_session: AsyncSession) -> AsyncGenerator[NormalizerS
         alert_repository = SQLAlertRepository(db_session)
         user_repository = SQLUserRepository(db_session)
         broker_repository = SQLBrokerRepository(db_session)
+        
+        # Initialize Redis repository and sensor cache service
+        redis_config = RedisSettings(
+            host=config.REDIS_HOST,
+            port=config.REDIS_PORT,
+            db=config.REDIS_DB,
+            password=config.REDIS_PASSWORD,
+            metadata_ttl=config.REDIS_METADATA_TTL
+        )
+        logger.info(f"redis: {config}")
+        redis_repository = RedisBaseRepository(
+            config=redis_config
+        )
+        await redis_repository.ensure_connected()
+        sensor_cache_service = SensorCacheService(redis_repository)
+        
         # Create service with all repositories for enhanced validation and alarm handling
         service = NormalizerService(
             datatype_repository=datatype_repository,
@@ -125,7 +144,8 @@ async def manage_service(db_session: AsyncSession) -> AsyncGenerator[NormalizerS
             alarm_repository=alarm_repository,
             alert_repository=alert_repository,
             user_repository=user_repository,
-            broker_repository=broker_repository
+            broker_repository=broker_repository,
+            sensor_cache_service=sensor_cache_service
         )
         
         yield service
@@ -133,6 +153,10 @@ async def manage_service(db_session: AsyncSession) -> AsyncGenerator[NormalizerS
         if service:
             logger.info("Stopping Normalizer Service...")
             await service.stop()
+        # Clean up Redis connection
+        if 'redis_repository' in locals():
+            logger.info("Closing Redis connection...")
+            await redis_repository.close()
 
 async def run_service() -> None:
     """

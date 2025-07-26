@@ -236,18 +236,36 @@ class UnifiedReadingManager:
         return asdict(reading)
     
     @staticmethod
-    def get_or_create_unified_reading(metadata: dict, device_id: str) -> dict:
-        """Create base reading and update with passed values if available."""
-        # Always create fresh base reading
+    async def get_or_create_unified_reading(metadata: dict, device_id: str, cache_context=None) -> dict:
+        """Get current reading from cache or create new one."""
+        
+        # Try to get current reading from cache if available
+        if cache_context:
+            try:
+                cached_reading = await cache_context.get_current_reading(device_id, 'L')
+                if cached_reading:
+                    logger.info(f"Retrieved current reading from cache for device {device_id}")
+                    return cached_reading
+            except Exception as e:
+                logger.warning(f"Failed to get cached reading, creating fresh: {e}")
+        
+        # Fallback: Create base reading (for fresh devices or cache unavailable)
+        logger.info(f"Creating fresh reading for device {device_id}")
         base_reading = UnifiedReadingManager.create_base_reading(device_id, metadata)
         
-        # If metadata contains current values, use them instead of defaults
+        # Legacy: If metadata contains current values, use them instead of defaults
         if 'values' in metadata and metadata['values'] is not None:
-            # Update base reading with current task values
             base_reading['values'] = metadata['values']
-            logger.info(f"Updated base reading with current values (task_count: {metadata['values'][11] if len(metadata['values']) > 11 else 'unknown'})")
+            logger.info(f"Updated base reading with legacy metadata values (task_count: {metadata['values'][11] if len(metadata['values']) > 11 else 'unknown'})")
         
         return base_reading
+    
+    @staticmethod 
+    def should_preserve_existing_data(operation_type: str) -> bool:
+        """Determine if operation should preserve existing cached data."""
+        # Operations that only provide partial data and should preserve existing state
+        PRESERVE_STATE_OPERATIONS = {'read_all'}
+        return operation_type in PRESERVE_STATE_OPERATIONS
     
     @staticmethod
     def update_reading_from_operation(base_reading: dict, decoded: dict, operation_type: str, metadata: dict) -> dict:
@@ -345,10 +363,10 @@ class OperationHandler:
     """Handles different operation types using unified reading approach."""
     
     @staticmethod
-    def handle_read_all(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
+    async def handle_read_all(device_id: str, decoded: Dict[str, Any], metadata: dict, cache_context=None) -> List[dict]:
         """Handle Read All response using unified reading."""
-        # Get or create unified reading from metadata
-        unified_reading = UnifiedReadingManager.get_or_create_unified_reading(metadata, device_id)
+        # Get or create unified reading from cache or metadata
+        unified_reading = await UnifiedReadingManager.get_or_create_unified_reading(metadata, device_id, cache_context)
         
         # Update reading with read_all operation data
         updated_reading = UnifiedReadingManager.update_reading_from_operation(
@@ -358,10 +376,10 @@ class OperationHandler:
         return [updated_reading]
     
     @staticmethod
-    def handle_create_task(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
+    async def handle_create_task(device_id: str, decoded: Dict[str, Any], metadata: dict, cache_context=None) -> List[dict]:
         """Handle task creation/update using unified reading."""
-        # Get or create unified reading from metadata
-        unified_reading = UnifiedReadingManager.get_or_create_unified_reading(metadata, device_id)
+        # Get or create unified reading from cache or metadata
+        unified_reading = await UnifiedReadingManager.get_or_create_unified_reading(metadata, device_id, cache_context)
         
         # Update reading with create_task operation data
         updated_reading = UnifiedReadingManager.update_reading_from_operation(
@@ -371,10 +389,10 @@ class OperationHandler:
         return [updated_reading]
     
     @staticmethod
-    def handle_read_task(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
+    async def handle_read_task(device_id: str, decoded: Dict[str, Any], metadata: dict, cache_context=None) -> List[dict]:
         """Handle Read Single Task operation using unified reading."""
-        # Get or create unified reading from metadata
-        unified_reading = UnifiedReadingManager.get_or_create_unified_reading(metadata, device_id)
+        # Get or create unified reading from cache or metadata
+        unified_reading = await UnifiedReadingManager.get_or_create_unified_reading(metadata, device_id, cache_context)
         
         # Update reading with read_task operation data
         updated_reading = UnifiedReadingManager.update_reading_from_operation(
@@ -384,10 +402,10 @@ class OperationHandler:
         return [updated_reading]
     
     @staticmethod
-    def handle_delete_task(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
+    async def handle_delete_task(device_id: str, decoded: Dict[str, Any], metadata: dict, cache_context=None) -> List[dict]:
         """Handle Delete Task operation using unified reading."""
-        # Get or create unified reading from metadata
-        unified_reading = UnifiedReadingManager.get_or_create_unified_reading(metadata, device_id)
+        # Get or create unified reading from cache or metadata
+        unified_reading = await UnifiedReadingManager.get_or_create_unified_reading(metadata, device_id, cache_context)
         
         # Update reading with delete_task operation data
         updated_reading = UnifiedReadingManager.update_reading_from_operation(
@@ -397,10 +415,10 @@ class OperationHandler:
         return [updated_reading]
     
     @staticmethod
-    def handle_delete_all(device_id: str, decoded: Dict[str, Any], metadata: dict) -> List[dict]:
+    async def handle_delete_all(device_id: str, decoded: Dict[str, Any], metadata: dict, cache_context=None) -> List[dict]:
         """Handle Delete All Tasks operation using unified reading."""
-        # Get or create unified reading from metadata
-        unified_reading = UnifiedReadingManager.get_or_create_unified_reading(metadata, device_id)
+        # Get or create unified reading from cache or metadata
+        unified_reading = await UnifiedReadingManager.get_or_create_unified_reading(metadata, device_id, cache_context)
         
         # Update reading with delete_all operation data
         updated_reading = UnifiedReadingManager.update_reading_from_operation(
@@ -409,7 +427,7 @@ class OperationHandler:
         
         return [updated_reading]
 
-def parse(payload: str, metadata: dict, config: dict, message_parser=None) -> Optional[ParseResult]:
+async def parse(payload: str, metadata: dict, config: dict, message_parser=None, cache_context=None) -> Optional[ParseResult]:
     """
     Main parser using unified reading system for light controller devices.
     
@@ -457,7 +475,14 @@ def parse(payload: str, metadata: dict, config: dict, message_parser=None) -> Op
         # Execute operation handler
         handler = operation_handlers.get(operation)
         if handler:
-            readings = handler(device_id, decoded, metadata)
+            readings = await handler(device_id, decoded, metadata, cache_context)
+            
+            # Log state preservation info
+            if UnifiedReadingManager.should_preserve_existing_data(operation):
+                if readings and len(readings) > 0:
+                    active_tasks = sum(1 for active in readings[0]['values'][4] if active)
+                    logger.info(f"Operation '{operation}' preserved {active_tasks} existing tasks")
+            
             return ParseResult("data", readings)
         
         # Unknown or unhandled operation
